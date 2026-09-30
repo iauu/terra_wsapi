@@ -83,6 +83,21 @@ fn consume_fixstr(cursor: &mut std::io::Cursor<&[u8]>) -> Result<String, ParseEr
     Ok(String::from_utf8(buf)?)
 }
 
+fn consume_inner_type(cursor: &mut std::io::Cursor<&[u8]>) -> Result<InnerType, ParseError> {
+    Ok(match cursor.read_one()? {
+        REF_MAGIC => {
+            cursor.consume_one()?;
+            let schema_id = SchemaId(cursor.consume_one()?);
+            InnerType::Ref(schema_id)
+        },
+        TYPE_SIG_MAGIC => {
+            let t = consume_type(cursor)?;
+            InnerType::Type(t)
+        },
+        _ => return Err(ParseError::InvalidMagic)
+    })
+}
+
 fn consume_type(cursor: &mut std::io::Cursor<&[u8]>) -> Result<Type, ParseError> {
     let v = cursor.read_one()?;
     if v != TYPE_SIG_MAGIC {
@@ -114,18 +129,7 @@ fn consume_type(cursor: &mut std::io::Cursor<&[u8]>) -> Result<Type, ParseError>
             Type::Ref(schema_id)
         },
         "map" | "array" | "set" | "collection" => {
-            let inner: InnerType = match cursor.read_one()? {
-                REF_MAGIC => {
-                    cursor.consume_one()?;
-                    let schema_id = SchemaId(cursor.consume_one()?);
-                    InnerType::Ref(schema_id)
-                },
-                TYPE_SIG_MAGIC => {
-                    let t = consume_type(cursor)?;
-                    InnerType::Type(t)
-                },
-                _ => return Err(ParseError::InvalidMagic)
-            };
+            let inner: InnerType = consume_inner_type(cursor)?;
             let inner = Box::new(inner);
             match s.as_ref() {
                 "map" => Type::Map(inner),
@@ -139,7 +143,7 @@ fn consume_type(cursor: &mut std::io::Cursor<&[u8]>) -> Result<Type, ParseError>
     })
 }
 
-fn consume_entry(cursor: &mut std::io::Cursor<&[u8]>) -> Result<(u8, String, Type), ParseError> {
+fn consume_field_entry(cursor: &mut std::io::Cursor<&[u8]>) -> Result<(u8, String, Type), ParseError> {
     let mut alt = cursor.clone();
     let idx = alt.consume_one()?;
     let v = alt.read_one()?;
@@ -156,6 +160,45 @@ fn consume_entry(cursor: &mut std::io::Cursor<&[u8]>) -> Result<(u8, String, Typ
     Ok((idx, name, t))
 }
 
+pub enum SchemaType {
+    FieldRef(u8),
+    AnonType(InnerType)
+}
+
+fn consume_schema_type(cursor: &mut std::io::Cursor<&[u8]>) -> Result<SchemaType, ParseError> {
+    let v = cursor.read_one()?;
+    if v < 0x80 {
+        Ok(SchemaType::FieldRef(v))
+    } else if v == REF_MAGIC || v == TYPE_SIG_MAGIC {
+        Ok(SchemaType::AnonType(consume_inner_type(cursor)?))
+    } else {
+        Err(ParseError::InvalidTermMagic)
+    }
+}
+
+fn consume_schema_entry(cursor: &mut std::io::Cursor<&[u8]>) -> Result<Vec<(u8, SchemaType)>, ParseError> {
+    let mut fields = Vec::new();
+    for i in 0x00u8..=0xffu8 {
+        match cursor.read_one()? {
+            v @ 0x00..=0x7f => {
+                cursor.consume_one()?;
+                fields.push((i, SchemaType::FieldRef(v)));
+            },
+            0x80 => {
+                cursor.consume_one()?;
+                let i = cursor.consume_one()?;
+                let v =
+                fields.push((i, consume_schema_type(cursor)?));
+            },
+            0xff => {
+                cursor.consume_one()?;
+                break;
+            }
+            _ => return Err(ParseError::InvalidTermMagic)
+        }
+    }
+    Ok(fields)
+}
 
 fn parse_schema(data: &[u8]) -> Result<String, ParseError> {
     let mut cursor = std::io::Cursor::new(data);
