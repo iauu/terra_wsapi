@@ -1,5 +1,6 @@
 use std::collections::VecDeque;
 use std::io::{BufRead, Read};
+use std::string::FromUtf8Error;
 use thiserror::Error;
 
 
@@ -11,6 +12,8 @@ pub enum ParseError {
     InvalidMagic,
     #[error("IO error from data stream")]
     IoError(#[from] std::io::Error),
+    #[error("Utf-8 conversion error")]
+    FromUtf8Error(#[from] FromUtf8Error),
 }
 
 const JOIN_MAGIC: u8 = 0x0a;
@@ -32,8 +35,15 @@ pub trait ReadOne: BufRead {
 impl<T: BufRead> ReadOne for T {}
 
 fn consume_fixstr(cursor: &mut std::io::Cursor<&[u8]>) -> Result<String, ParseError> {
-    let v = cursor.consume_one()?;
-    todo!()
+    let v = cursor.read_one()?;
+    if v < 0xa0 {
+        return Err(ParseError::InvalidMagic);
+    }
+    cursor.consume_one()?;
+    let len = v - 0xa0;
+    let buf = cursor.fill_buf()?[..len as usize].to_vec();
+    cursor.consume(len as usize);
+    Ok(String::from_utf8(buf)?)
 }
 
 fn parse_schema(data: &[u8]) -> Result<String, ParseError> {
