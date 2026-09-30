@@ -1,0 +1,8 @@
+[package]
+name = "terra_wsapi"
+version = "0.1.0"
+edition = "2024"
+
+[dependencies]
+colyseus-schema = "0.2.0"
+thiserror = "2.0.21"
