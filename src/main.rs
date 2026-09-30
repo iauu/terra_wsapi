@@ -10,6 +10,8 @@ mod schema;
 pub enum ParseError {
     #[error("Invalid magic number")]
     InvalidMagic,
+    #[error("Invalid termination magic number")]
+    InvalidTermMagic,
     #[error("IO error from data stream")]
     IoError(#[from] std::io::Error),
     #[error("Utf-8 conversion error")]
@@ -17,9 +19,11 @@ pub enum ParseError {
 }
 
 const JOIN_MAGIC: u8 = 0x0a;
+const FIELD_INIT_MAGIC: u8 = 0x80;
 const TYPE_SIG_MAGIC: u8 = 0x81;
 const FIXED_STR_LEN_OFFSET: u8 = 0xa0;
 const REF_MAGIC: u8 = 0x82;
+const TERM_MAGIC: u8 = 0xff;
 
 pub trait ReadOne: BufRead {
     fn read_one(&mut self) -> Result<u8, std::io::Error> {
@@ -134,6 +138,24 @@ fn consume_type(cursor: &mut std::io::Cursor<&[u8]>) -> Result<Type, ParseError>
         _ => return Err(ParseError::InvalidMagic)
     })
 }
+
+fn consume_entry(cursor: &mut std::io::Cursor<&[u8]>) -> Result<(u8, String, Type), ParseError> {
+    let mut alt = cursor.clone();
+    let idx = alt.consume_one()?;
+    let v = alt.read_one()?;
+    if v < JOIN_MAGIC {
+        return Err(ParseError::InvalidMagic);
+    }
+    cursor.consume(2);
+    let name = consume_fixstr(cursor)?;
+    let t = consume_type(cursor)?;
+    let end = cursor.consume_one()?;
+    if end != TERM_MAGIC {
+        return Err(ParseError::InvalidTermMagic);
+    }
+    Ok((idx, name, t))
+}
+
 
 fn parse_schema(data: &[u8]) -> Result<String, ParseError> {
     let mut cursor = std::io::Cursor::new(data);
