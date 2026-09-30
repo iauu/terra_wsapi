@@ -41,7 +41,20 @@ pub trait ReadOne: BufRead {
 
 impl<T: BufRead> ReadOne for T {}
 
-pub struct SchemaId(pub u8);
+fn consume_vu16(cursor: &mut std::io::Cursor<&[u8]>) -> Result<u16, ParseError> {
+    let b1 = cursor.read_one()?;
+    cursor.consume_one()?;
+
+    if b1 < 0x80 {
+        Ok(b1 as u16)
+    } else {
+        let b2 = cursor.read_one()?;
+        cursor.consume_one()?;
+        Ok(((b1 as u16 & 0x7F) << 7) | (b2 as u16 & 0x7F))
+    }
+}
+
+pub struct SchemaId(pub u16);
 
 pub enum InnerType {
     Type(Type), // 81 [FixedStr],
@@ -87,7 +100,7 @@ fn consume_inner_type(cursor: &mut std::io::Cursor<&[u8]>) -> Result<InnerType, 
     Ok(match cursor.read_one()? {
         REF_MAGIC => {
             cursor.consume_one()?;
-            let schema_id = SchemaId(cursor.consume_one()?);
+            let schema_id = SchemaId(consume_vu16(cursor)?);
             InnerType::Ref(schema_id)
         },
         TYPE_SIG_MAGIC => {
@@ -125,7 +138,7 @@ fn consume_type(cursor: &mut std::io::Cursor<&[u8]>) -> Result<Type, ParseError>
                 return Err(ParseError::InvalidMagic);
             }
             cursor.consume_one()?;
-            let schema_id = SchemaId(cursor.consume_one()?);
+            let schema_id = SchemaId(consume_vu16(cursor)?);
             Type::Ref(schema_id)
         },
         "map" | "array" | "set" | "collection" => {
@@ -176,9 +189,10 @@ fn consume_schema_type(cursor: &mut std::io::Cursor<&[u8]>) -> Result<SchemaType
     }
 }
 
-fn consume_schema_entry(cursor: &mut std::io::Cursor<&[u8]>) -> Result<Vec<(u8, SchemaType)>, ParseError> {
+fn consume_schema_entry(cursor: &mut std::io::Cursor<&[u8]>) -> Result<Vec<(u16, SchemaType)>, ParseError> {
     let mut fields = Vec::new();
-    for i in 0x00u8..=0xffu8 {
+    let mut i: u16 = 0;
+    loop {
         match cursor.read_one()? {
             v @ 0x00..=0x7f => {
                 cursor.consume_one()?;
@@ -186,7 +200,7 @@ fn consume_schema_entry(cursor: &mut std::io::Cursor<&[u8]>) -> Result<Vec<(u8, 
             },
             0x80 => {
                 cursor.consume_one()?;
-                let i = cursor.consume_one()?;
+                i = consume_vu16(cursor)?;
                 let v =
                 fields.push((i, consume_schema_type(cursor)?));
             },
@@ -196,6 +210,7 @@ fn consume_schema_entry(cursor: &mut std::io::Cursor<&[u8]>) -> Result<Vec<(u8, 
             }
             _ => return Err(ParseError::InvalidTermMagic)
         }
+        i += 1;
     }
     Ok(fields)
 }
