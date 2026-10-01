@@ -27,9 +27,10 @@ const TERM_MAGIC: u8 = 0xff;
 
 pub trait ReadOne: BufRead {
     fn read_one(&mut self) -> Result<u8, std::io::Error> {
-        let mut buf = [0u8; 1];
-        self.read_exact(&mut buf)?;
-        Ok(buf[0])
+        self.fill_buf()?
+            .first()
+            .copied()
+            .ok_or_else(|| std::io::Error::from(std::io::ErrorKind::UnexpectedEof))
     }
 
     fn consume_one(&mut self) -> Result<u8, std::io::Error> {
@@ -78,19 +79,27 @@ pub enum Type {
     Boolean, // bool
     // Other:
     Ref(SchemaId), // 81 [FixedStr: A3 "ref"] 82 [id]
-    Map(Box<InnerType>), // 81 [FixedStr: A4 "map"] [MapInnerType]
+    Map(Box<InnerType>), // 81 [FixedStr: A3 "map"] [MapInnerType]
     Array(Box<InnerType>), // 81 [FixedStr: A5 "array"] [MapInnerType]
-    Collection(Box<InnerType>), // 81 [FixedStr: A5 "collection"] [MapInnerType]
+    Collection(Box<InnerType>), // 81 [FixedStr: AA "collection"] [MapInnerType]
     Set(Box<InnerType>) // 81 [FixedStr: A3 "set"] [MapInnerType]
 }
 
 fn consume_fixstr(cursor: &mut std::io::Cursor<&[u8]>) -> Result<String, ParseError> {
     let v = cursor.read_one()?;
-    if v < FIXED_STR_LEN_OFFSET || v > 0xc0 {
+    if !(FIXED_STR_LEN_OFFSET..=0xbf).contains(&v) {
         return Err(ParseError::InvalidMagic);
     }
     cursor.consume_one()?;
     let len = v - FIXED_STR_LEN_OFFSET;
+    let available = cursor.fill_buf()?;
+
+    if available.len() < len as usize {
+        return Err(std::io::Error::from(
+            std::io::ErrorKind::UnexpectedEof
+        ).into());
+    }
+
     let buf = cursor.fill_buf()?[..len as usize].to_vec();
     cursor.consume(len as usize);
     Ok(String::from_utf8(buf)?)
@@ -156,14 +165,15 @@ fn consume_type(cursor: &mut std::io::Cursor<&[u8]>) -> Result<Type, ParseError>
     })
 }
 
-fn consume_field_entry(cursor: &mut std::io::Cursor<&[u8]>) -> Result<(u8, String, Type), ParseError> {
+fn consume_field_entry(cursor: &mut std::io::Cursor<&[u8]>) -> Result<(u16, String, Type), ParseError> {
     let mut alt = cursor.clone();
-    let idx = alt.consume_one()?;
+    let idx = consume_vu16(&mut alt)?;
     let v = alt.read_one()?;
-    if v < JOIN_MAGIC {
+    if v != FIELD_INIT_MAGIC {
         return Err(ParseError::InvalidMagic);
     }
-    cursor.consume(2);
+    consume_vu16(cursor)?;
+    cursor.consume_one()?;
     let name = consume_fixstr(cursor)?;
     let t = consume_type(cursor)?;
     let end = cursor.consume_one()?;
@@ -174,15 +184,20 @@ fn consume_field_entry(cursor: &mut std::io::Cursor<&[u8]>) -> Result<(u8, Strin
 }
 
 pub enum SchemaType {
-    FieldRef(u8),
+    FieldRef(u16),
     AnonType(InnerType)
 }
 
 fn consume_schema_type(cursor: &mut std::io::Cursor<&[u8]>) -> Result<SchemaType, ParseError> {
     let v = cursor.read_one()?;
     if v < 0x80 {
-        Ok(SchemaType::FieldRef(v))
-    } else if v == REF_MAGIC || v == TYPE_SIG_MAGIC {
+        cursor.consume_one()?;
+        Ok(SchemaType::FieldRef(v as u16))
+    }
+    else if v == 0x80 {
+        Ok(SchemaType::FieldRef(consume_vu16(cursor)?))
+    }
+    else if v == REF_MAGIC || v == TYPE_SIG_MAGIC {
         Ok(SchemaType::AnonType(consume_inner_type(cursor)?))
     } else {
         Err(ParseError::InvalidTermMagic)
@@ -196,12 +211,11 @@ fn consume_schema_entry(cursor: &mut std::io::Cursor<&[u8]>) -> Result<Vec<(u16,
         match cursor.read_one()? {
             v @ 0x00..=0x7f => {
                 cursor.consume_one()?;
-                fields.push((i, SchemaType::FieldRef(v)));
+                fields.push((i, SchemaType::FieldRef(v as u16)));
             },
             0x80 => {
                 cursor.consume_one()?;
                 i = consume_vu16(cursor)?;
-                let v =
                 fields.push((i, consume_schema_type(cursor)?));
             },
             0xff => {
@@ -218,11 +232,13 @@ fn consume_schema_entry(cursor: &mut std::io::Cursor<&[u8]>) -> Result<Vec<(u16,
 fn parse_schema(data: &[u8]) -> Result<String, ParseError> {
     let mut cursor = std::io::Cursor::new(data);
     let v = cursor.read_one()?;
-    if v < JOIN_MAGIC {
+    if v != JOIN_MAGIC {
         return Err(ParseError::InvalidMagic);
     }
     cursor.consume_one()?;
     cursor.consume(1);
+    let len = cursor.read_one()? as usize;
+    cursor.consume(len);
     let mut pass1 = cursor.clone();
 
 
