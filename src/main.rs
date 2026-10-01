@@ -1,4 +1,4 @@
-use std::collections::VecDeque;
+use std::collections::{HashMap, VecDeque};
 use std::io::{BufRead, Read};
 use std::string::FromUtf8Error;
 use thiserror::Error;
@@ -42,16 +42,23 @@ pub trait ReadOne: BufRead {
 
 impl<T: BufRead> ReadOne for T {}
 
-fn consume_vu16(cursor: &mut std::io::Cursor<&[u8]>) -> Result<u16, ParseError> {
-    let b1 = cursor.read_one()?;
-    cursor.consume_one()?;
+fn consume_vu16(
+    cursor: &mut std::io::Cursor<&[u8]>
+) -> Result<u16, ParseError> {
+    let prefix = cursor.consume_one()?;
 
-    if b1 < 0x80 {
-        Ok(b1 as u16)
-    } else {
-        let b2 = cursor.read_one()?;
-        cursor.consume_one()?;
-        Ok(((b1 as u16 & 0x7F) << 7) | (b2 as u16 & 0x7F))
+    match prefix {
+        0x00..=0x7f => Ok(prefix as u16),
+        0xcc => {
+            Ok(cursor.consume_one()? as u16)
+        }
+        0xcd => {
+            let lo = cursor.consume_one()? as u16;
+            let hi = cursor.consume_one()? as u16;
+
+            Ok(lo | (hi << 8))
+        }
+        _ => Err(ParseError::InvalidMagic),
     }
 }
 
@@ -103,6 +110,24 @@ fn consume_fixstr(cursor: &mut std::io::Cursor<&[u8]>) -> Result<String, ParseEr
     let buf = cursor.fill_buf()?[..len as usize].to_vec();
     cursor.consume(len as usize);
     Ok(String::from_utf8(buf)?)
+}
+
+fn consume_len_string(
+    cursor: &mut std::io::Cursor<&[u8]>,
+) -> Result<String, ParseError> {
+    let len = cursor.consume_one()? as usize;
+    let available = cursor.fill_buf()?;
+
+    if available.len() < len {
+        return Err(std::io::Error::from(
+            std::io::ErrorKind::UnexpectedEof
+        ).into());
+    }
+
+    let bytes = available[..len].to_vec();
+    cursor.consume(len);
+
+    Ok(String::from_utf8(bytes)?)
 }
 
 fn consume_inner_type(cursor: &mut std::io::Cursor<&[u8]>) -> Result<InnerType, ParseError> {
@@ -190,15 +215,12 @@ pub enum SchemaType {
 
 fn consume_schema_type(cursor: &mut std::io::Cursor<&[u8]>) -> Result<SchemaType, ParseError> {
     let v = cursor.read_one()?;
-    if v < 0x80 {
-        cursor.consume_one()?;
-        Ok(SchemaType::FieldRef(v as u16))
-    }
-    else if v == 0x80 {
-        Ok(SchemaType::FieldRef(consume_vu16(cursor)?))
-    }
-    else if v == REF_MAGIC || v == TYPE_SIG_MAGIC {
+    if v == REF_MAGIC || v == TYPE_SIG_MAGIC {
         Ok(SchemaType::AnonType(consume_inner_type(cursor)?))
+    } else if v <= 0x7f || v == 0xcc || v == 0xcd {
+        Ok(SchemaType::FieldRef(
+            consume_vu16(cursor)?
+        ))
     } else {
         Err(ParseError::InvalidTermMagic)
     }
@@ -231,15 +253,55 @@ fn consume_schema_entry(cursor: &mut std::io::Cursor<&[u8]>) -> Result<Vec<(u16,
 
 fn parse_schema(data: &[u8]) -> Result<String, ParseError> {
     let mut cursor = std::io::Cursor::new(data);
-    let v = cursor.read_one()?;
-    if v != JOIN_MAGIC {
+    if cursor.consume_one()? != JOIN_MAGIC {
         return Err(ParseError::InvalidMagic);
     }
-    cursor.consume_one()?;
-    cursor.consume(1);
-    let len = cursor.read_one()? as usize;
-    cursor.consume(len);
-    let mut pass1 = cursor.clone();
+    // 09 "lGrTYzTar"
+    let room_id = consume_len_string(&mut cursor)?;
+    // 06 "schema"
+    let serializer = consume_len_string(&mut cursor)?;
+
+    if serializer != "schema" {
+        return Err(ParseError::InvalidMagic);
+    }
+    let length = consume_vu16(&mut cursor)?;
+    if cursor.fill_buf()?.len() < length as usize {
+        return Err(ParseError::IoError(std::io::Error::from(std::io::ErrorKind::UnexpectedEof)));
+    }
+    // 80 01 FF
+    if cursor.consume_one()? != FIELD_INIT_MAGIC {
+        return Err(ParseError::InvalidMagic);
+    }
+    let root_schema_id = consume_vu16(&mut cursor)?;
+
+    if cursor.consume_one()? != TERM_MAGIC {
+        return Err(ParseError::InvalidTermMagic);
+    }
+    let mut field_entries: HashMap<u16, (String, Type)> =
+        HashMap::new();
+
+    let mut schema_entries: HashMap<u16, Vec<(u16, SchemaType)>> =
+        HashMap::new();
+
+    while (cursor.position() as usize) < data.len() {
+        let entry_start = cursor.position();
+        let mut field_cursor = cursor.clone();
+
+        if let Ok((id, name, ty)) =
+            consume_field_entry(&mut field_cursor)
+        {
+            field_entries.insert(id, (name, ty));
+            cursor = field_cursor;
+            continue;
+        }
+        cursor.set_position(entry_start);
+
+        let schema_id = consume_vu16(&mut cursor)?;
+
+        let fields = consume_schema_entry(&mut cursor)?;
+
+        schema_entries.insert(schema_id, fields);
+    }
 
 
 
