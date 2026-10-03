@@ -1,4 +1,4 @@
-use std::io::BufRead;
+use std::io::{BufRead, Read};
 
 use std::string::FromUtf8Error;
 use thiserror::Error;
@@ -30,6 +30,21 @@ pub trait ReadOne: BufRead {
         self.consume(1);
         Ok(r)
     }
+
+    fn read_many<const N: usize>(&mut self) -> Result<[u8; N], ParseError> {
+        let mut buf: [u8; N] = [0u8; N];
+        let data_buf = self.fill_buf()?;
+        buf.copy_from_slice(data_buf);
+        Ok(buf)
+    }
+
+    fn consume_many<const N: usize>(&mut self) -> Result<[u8; N], ParseError> {
+        let data: [u8; N] = self.read_many::<N>()?;
+        self.consume(N);
+        Ok(data)
+    }
 }
 
 impl<T: BufRead> ReadOne for T {}
+
+pub type ByteCursor<'a> = std::io::Cursor<&'a [u8]>;
