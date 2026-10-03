@@ -1,21 +1,9 @@
+use crate::cursor::ReadOne;
 use std::collections::{HashMap, VecDeque};
 use std::io::{BufRead, Read};
 use std::string::FromUtf8Error;
 use thiserror::Error;
-
-
-
-#[derive(Error, Debug)]
-pub enum ParseError {
-    #[error("Invalid magic number")]
-    InvalidMagic,
-    #[error("Invalid termination magic number")]
-    InvalidTermMagic,
-    #[error("IO error from data stream")]
-    IoError(#[from] std::io::Error),
-    #[error("Utf-8 conversion error")]
-    FromUtf8Error(#[from] FromUtf8Error),
-}
+use crate::cursor::ParseError;
 
 const JOIN_MAGIC: u8 = 0x0a;
 const FIELD_INIT_MAGIC: u8 = 0x80;
@@ -24,22 +12,6 @@ const FIXED_STR_LEN_OFFSET: u8 = 0xa0;
 const REF_MAGIC: u8 = 0x82;
 const TERM_MAGIC: u8 = 0xff;
 
-pub trait ReadOne: BufRead {
-    fn read_one(&mut self) -> Result<u8, std::io::Error> {
-        self.fill_buf()?
-            .first()
-            .copied()
-            .ok_or_else(|| std::io::Error::from(std::io::ErrorKind::UnexpectedEof))
-    }
-
-    fn consume_one(&mut self) -> Result<u8, std::io::Error> {
-        let r = self.read_one()?;
-        self.consume(1);
-        Ok(r)
-    }
-}
-
-impl<T: BufRead> ReadOne for T {}
 
 fn consume_vu16(
     cursor: &mut std::io::Cursor<&[u8]>
