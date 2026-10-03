@@ -3,26 +3,6 @@
 version = 4
 
 [[package]]
-name = "colyseus-schema"
-version = "0.2.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "a4470b5876813071868126f3b3f43349544c184c880f9e77c45a77418163ce64"
-dependencies = [
- "colyseus-schema-derive",
-]
-
-[[package]]
-name = "colyseus-schema-derive"
-version = "0.2.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "0327de5a746d2fbd5b8b1ad407dae6e2c3179cfa3425d2082bc827ede026726c"
-dependencies = [
- "proc-macro2",
- "quote",
- "syn 2.0.119",
-]
-
-[[package]]
 name = "proc-macro2"
 version = "1.0.107"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -42,17 +22,6 @@ dependencies = [
 
 [[package]]
 name = "syn"
-version = "2.0.119"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "872831b642d1a07999a962a351ed35b955ea2cfc8f3862091e2a240a84f17297"
-dependencies = [
- "proc-macro2",
- "quote",
- "unicode-ident",
-]
-
-[[package]]
-name = "syn"
 version = "3.0.6"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "8593e8e72159ed2257d083c7a454a85cbf854f37a0966d8d483aff8c8a3ebcee"
@@ -66,7 +35,6 @@ dependencies = [
 name = "terra_wsapi"
 version = "0.1.0"
 dependencies = [
- "colyseus-schema",
  "thiserror",
 ]
 
@@ -87,7 +55,7 @@ checksum = "fe5197923287db20a58125f0bc85c062f7f2c892de97b18c356f9efb14b28524"
 dependencies = [
  "proc-macro2",
  "quote",
- "syn 3.0.6",
+ "syn",
 ]
 
 [[package]]
