@@ -34,6 +34,11 @@ pub trait ReadOne: BufRead {
     fn read_many<const N: usize>(&mut self) -> Result<[u8; N], ParseError> {
         let mut buf: [u8; N] = [0u8; N];
         let data_buf = self.fill_buf()?;
+        if data_buf.len() < N {
+            return Err(std::io::Error::from(
+                std::io::ErrorKind::UnexpectedEof
+            ).into());
+        }
         buf.copy_from_slice(data_buf);
         Ok(buf)
     }
