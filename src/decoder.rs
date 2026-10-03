@@ -1,3 +1,4 @@
+use std::io::{BufRead, Seek, SeekFrom};
 use crate::cursor::{ByteCursor, ParseError, ReadOne};
 
 #[derive(Debug, Clone, Copy)]
@@ -85,6 +86,36 @@ fn consume_number(cursor: &mut ByteCursor) -> Result<Number, ParseError> {
         }
 
         _ => {
+            cursor.seek(SeekFrom::Current(-1))?;
+            return Err(ParseError::InvalidMagic);
+        }
+    })
+}
+
+fn consume_string(cursor: &mut ByteCursor) -> Result<String, ParseError> {
+    Ok(match cursor.consume_one()? {
+        byte @ 0xa0..=0xbf => {
+            let len = byte - 0xa0;
+            let buf = cursor.consume_n(len as usize)?;
+            String::from_utf8(buf.into())?
+        },
+        0xd9 => {
+            let len = cursor.consume_one()?;
+            let buf = cursor.consume_n(len as usize)?;
+            String::from_utf8(buf.into())?
+        },
+        0xda => {
+            let len = u16::from_le_bytes(cursor.consume_many::<2>()?) as usize;
+            let buf = cursor.consume_n(len)?;
+            String::from_utf8(buf.into())?
+        },
+        0xdb => {
+            let len = u32::from_le_bytes(cursor.consume_many::<4>()?) as usize;
+            let buf = cursor.consume_n(len)?;
+            String::from_utf8(buf.into())?
+        }
+        _ => {
+            cursor.seek(SeekFrom::Current(-1))?;
             return Err(ParseError::InvalidMagic);
         }
     })

@@ -48,6 +48,34 @@ pub trait ReadOne: BufRead {
         self.consume(N);
         Ok(data)
     }
+    
+    fn read_n(&mut self, len: usize) -> Result<&[u8], ParseError> {
+        let available = self.fill_buf()?;
+
+        if available.len() < len as usize {
+            return Err(std::io::Error::from(
+                std::io::ErrorKind::UnexpectedEof
+            ).into());
+        }
+
+        let buf = &self.fill_buf()?[..len];
+        Ok(buf)
+    }
+    
+    fn consume_n(&mut self, len: usize) -> Result<&[u8], ParseError> {
+        let available = self.fill_buf()?;
+
+        if available.len() < len as usize {
+            return Err(std::io::Error::from(
+                std::io::ErrorKind::UnexpectedEof
+            ).into());
+        }
+
+        self.consume(len);
+
+        let buf = &self.fill_buf()?[..len];
+        Ok(buf)
+    }
 }
 
 impl<T: BufRead> ReadOne for T {}
