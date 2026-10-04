@@ -688,6 +688,106 @@ impl Decoder {
             );
         decoder
     }
+
+    fn schema_to_json(
+        &self,
+        schema_id: &SchemaId,
+        fields: &HashMap<u64, ColyseusData>,
+    ) -> Result<serde_json::Value, ParseError> {
+        let mut object =
+            serde_json::Map::new();
+
+        for (field_index, value) in fields {
+            let field_index: u16 =
+                (*field_index)
+                    .try_into()
+                    .map_err(|_| ParseError::InvalidSchema)?;
+
+            let name = self.schema_data
+                .get_schema_field_name(
+                    schema_id,
+                    field_index,
+                )
+                .ok_or(ParseError::InvalidSchema)?;
+
+            object.insert(
+                name.to_owned(),
+                self.data_to_json(value)?,
+            );
+        }
+
+        Ok(serde_json::Value::Object(object))
+    }
+
+    fn data_to_json(
+        &self,
+        data: &ColyseusData,
+    ) -> Result<serde_json::Value, ParseError> {
+        match data {
+            ColyseusData::Data(value) => {
+                self.value_to_json(value)
+            }
+
+            ColyseusData::Ref(ref_id) => {
+                let target = self.ref_table
+                    .get(ref_id)
+                    .ok_or(ParseError::InvalidSchema)?;
+
+                self.data_to_json(target)
+            }
+
+            ColyseusData::Schema(
+                schema_id,
+                fields,
+            ) => {
+                self.schema_to_json(
+                    schema_id,
+                    fields,
+                )
+            }
+        }
+    }
+
+    pub fn value_to_json(&self, value: &Value) -> Result<serde_json::Value, ParseError> {
+        Ok(match value {
+            Value::Boolean(v) => (*v).into(),
+            Value::INumber(v) => (*v).into(),
+            Value::UNumber(v) => (*v).into(),
+            Value::Float(v) => serde_json::Number::from_f64(*v)
+                .map(serde_json::Value::Number)
+                .unwrap_or(serde_json::Value::Null),
+            Value::Map(entries) => {
+                let mut object =
+                    serde_json::Map::new();
+
+                for (_, (key, value)) in entries {
+                    object.insert(
+                        key.clone(),
+                        self.data_to_json(value)?,
+                    );
+                }
+
+                serde_json::Value::Object(object)
+            }
+
+            Value::Vec(entries) => {
+                let mut entries: Vec<_> =
+                    entries.iter().collect();
+
+                entries.sort_by_key(|(index, _)| *index);
+
+                let values = entries
+                    .into_iter()
+                    .map(|(_, value)| {
+                        self.data_to_json(value)
+                    })
+                    .collect::<Result<Vec<_>, _>>()?;
+
+                serde_json::Value::Array(values)
+            }
+            Value::String(s) => (s.clone()).into(),
+        })
+    }
 }
 
 macro_rules! impl_prim {

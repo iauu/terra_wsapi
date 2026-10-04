@@ -247,6 +247,15 @@ impl SchemaData {
             SchemaType::AnonType(InnerType::Ref(schema_id)) => Type::Ref(*schema_id)
         })
     }
+
+    pub fn get_schema_field_name(&self, schema_id: &SchemaId, idx: u16) -> Option<String> {
+        let schema = self.schema_entries.get(&schema_id.0)?;
+        let item = &schema.iter().find(|(i, _)| *i == idx)?.1;
+        match item {
+            SchemaType::FieldRef(t) => Some(self.field_entries.get(t)?.0.clone()),
+            SchemaType::AnonType(_) => None,
+        }
+    }
 }
 
 impl From<InnerType> for Type {
