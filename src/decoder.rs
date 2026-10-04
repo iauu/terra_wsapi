@@ -120,3 +120,47 @@ fn consume_string(cursor: &mut ByteCursor) -> Result<String, ParseError> {
         }
     })
 }
+
+fn consume_boolean(cursor: &mut ByteCursor) -> Result<bool, ParseError> {
+    Ok(cursor.consume_one()? != 0x00)
+}
+
+pub enum Value {
+    Boolean(bool),
+    INumber(i64),
+    UNumber(u64),
+    Float(f64),
+    Vec(Vec<ColyseusData>),
+    Map(Vec<Option<(String, ColyseusData)>>),
+    Ref(Box<ColyseusData>),
+    String(String)
+}
+
+pub enum ColyseusData {
+    Ref(u64),
+    Data(serde_json::Value)
+}
+
+pub enum RawInstruction {
+    SwitchRef(u64),
+    SchemaInstruction(u64, RawSchemaInstruction),
+    CollectionInstruction(u64, RawCollectionInstruction)
+}
+
+pub struct RawSchemaInstruction {
+    pub opcode: u8, // u2 (higher)
+    pub field_index: u8, // u6 (lower)
+    pub data: Option<ColyseusData>
+}
+
+pub struct RawCollectionInstruction {
+    pub opcode: u8,
+    pub field_index: u32,
+    pub key: Option<String>, // map, op:add
+    pub data: Option<ColyseusData>
+}
+
+pub enum State {
+    Schema,
+    Collection
+}
