@@ -31,6 +31,7 @@ use std::ops::Deref;
 use std::path::PathBuf;
 use cfg_if::cfg_if;
 use reqwest::Url;
+use bytes;
 use serde_json::json;
 use tokio_tungstenite::connect_async;
 use tokio_tungstenite::tungstenite::client::IntoClientRequest;
@@ -191,18 +192,46 @@ async fn ws_task(
 
                 match data[0] {
                     0x0a => {
-                        let schema_data =
-                            parse_schema(&data)?;
+                        tracing::debug!(
+                            "JOIN/SCHEMA: {} bytes",
+                            data.len()
+                        );
+                        let schema_data = match parse_schema(&data) {
+                            Ok(v) => v,
+                            Err(e) => {
+                                tracing::error!(
+                                    "parse_schema failed: {:?}",
+                                e);
+                                return Err(e.into());
+                            }
+                        };
+                        tracing::debug!(
+                        "root_schema_id={:?}, schema_ids={:?}",
+                        schema_data.root_schema_id,
+                        schema_data.schema_entries.keys().collect::<Vec<_>>(),
+                    );
+
+                                        tracing::debug!(
+                        "root field 0={:?}",
+                        schema_data.get_schema_field_type(
+                            &schema_data.root_schema_id,
+                            0,
+                        )
+                    );
 
                         let root_schema_id =
                             schema_data.root_schema_id;
 
-                        decoder = Some(
-                            Decoder::new(
-                                root_schema_id,
-                                schema_data,
-                            )
-                        );
+                        decoder = Some(Decoder::new(
+                            root_schema_id,
+                            schema_data,
+                        ));
+
+                        write
+                            .send(Message::Binary(
+                                bytes::Bytes::from(vec![0x0a])
+                            ))
+                            .await?;
                     }
                     0x0e => {
                         let decoder = decoder
@@ -217,7 +246,9 @@ async fn ws_task(
                             );
 
                         decoder.apply(&mut cursor)?;
-                        let _ = tx.send(decoder.to_json()?);
+                        let json = decoder.to_json()?;
+                        tracing::debug!("{:?}", json);
+                        let _ = tx.send(json);
 
                     }
                     0x0f => {
@@ -233,7 +264,9 @@ async fn ws_task(
                             );
 
                         decoder.apply(&mut cursor)?;
-                        let _ = tx.send(decoder.to_json()?);
+                        let json = decoder.to_json()?;
+                        tracing::debug!("{:?}", json);
+                        let _ = tx.send(json);
                     }
                     0x0d => {
                         if let Some(ping) =
