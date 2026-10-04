@@ -20,6 +20,8 @@ pub enum ParseError {
     InvalidOpcode,
     #[error("Invalid schema")]
     InvalidSchema,
+    #[error("MsgPack")]
+    MsgPackError,
 }
 
 
