@@ -164,3 +164,4 @@ pub enum State {
     Schema,
     Collection
 }
+

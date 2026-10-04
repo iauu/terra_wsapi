@@ -1,6 +1,7 @@
 mod schema;
 mod decoder;
 mod cursor;
+mod consts;
 
 use schema::parse_schema;
 
