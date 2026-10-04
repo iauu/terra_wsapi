@@ -788,6 +788,16 @@ impl Decoder {
             Value::String(s) => (s.clone()).into(),
         })
     }
+
+    pub fn to_json(
+        &self,
+    ) -> Result<serde_json::Value, ParseError> {
+        let root = self.ref_table
+            .get(&0)
+            .ok_or(ParseError::InvalidSchema)?;
+
+        self.data_to_json(root)
+    }
 }
 
 macro_rules! impl_prim {
