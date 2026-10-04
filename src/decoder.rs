@@ -1,5 +1,7 @@
+use std::collections::HashMap;
 use std::io::{BufRead, Seek, SeekFrom};
 use crate::cursor::{ByteCursor, ParseError, ReadOne};
+use crate::schema::{SchemaData, SchemaId};
 
 #[derive(Debug, Clone, Copy)]
 pub enum Number {
@@ -130,15 +132,15 @@ pub enum Value {
     INumber(i64),
     UNumber(u64),
     Float(f64),
-    Vec(Vec<ColyseusData>),
-    Map(Vec<Option<(String, ColyseusData)>>),
-    Ref(Box<ColyseusData>),
+    Vec(HashMap<u64, ColyseusData>),
+    Map(HashMap<u64, (String, ColyseusData)>),
     String(String)
 }
 
 pub enum ColyseusData {
     Ref(u64),
-    Data(serde_json::Value)
+    Data(Value),
+    Schema(SchemaId, HashMap<u64, ColyseusData>)
 }
 
 pub enum RawInstruction {
@@ -161,7 +163,12 @@ pub struct RawCollectionInstruction {
 }
 
 pub enum State {
-    Schema,
-    Collection
+    Schema(u64, SchemaId),
+    Collection(u64)
 }
 
+pub struct Decoder {
+    pub state: State,
+    pub ref_table: HashMap<u64, ColyseusData>,
+    pub schema_data: SchemaData
+}

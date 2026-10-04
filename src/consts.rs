@@ -29,3 +29,12 @@ pub enum Operation {
     // MapSchema Operations
     CLEAR = 10,
 }
+
+#[repr(u8)]
+pub enum SmallOperation {
+    ADD = 2,
+    REPLACE = 0,
+    DELETE = 1,
+    DELETE_AND_ADD = 3
+}
+
