@@ -164,7 +164,7 @@ fn consume_type(cursor: &mut std::io::Cursor<&[u8]>) -> Result<Type, ParseError>
     })
 }
 
-fn consume_field_entry(cursor: &mut std::io::Cursor<&[u8]>) -> Result<(u16, String, Type), ParseError> {
+fn consume_field_entry(cursor: &mut std::io::Cursor<&[u8]>, payload_end: usize) -> Result<(u16, String, Type), ParseError> {
     let mut alt = cursor.clone();
     let idx = consume_vu16(&mut alt)?;
     let v = alt.read_one()?;
@@ -175,8 +175,13 @@ fn consume_field_entry(cursor: &mut std::io::Cursor<&[u8]>) -> Result<(u16, Stri
     cursor.consume_one()?;
     let name = consume_fixstr(cursor)?;
     let t = consume_type(cursor)?;
-    let end = cursor.consume_one()?;
-    if end != TERM_MAGIC {
+    if (cursor.position() as usize) < payload_end {
+        let end = cursor.consume_one()?;
+
+        if end != TERM_MAGIC {
+            return Err(ParseError::InvalidTermMagic);
+        }
+    } else if cursor.position() as usize > payload_end {
         return Err(ParseError::InvalidTermMagic);
     }
     Ok((idx, name, t))
@@ -227,6 +232,7 @@ fn consume_schema_entry(cursor: &mut std::io::Cursor<&[u8]>) -> Result<Vec<(u16,
 }
 
 pub struct SchemaData {
+    pub root_schema_id: SchemaId,
     pub schema_entries: HashMap<u16, Vec<(u16, SchemaType)>>,
     pub field_entries: HashMap<u16, (String, Type)>
 }
@@ -252,10 +258,29 @@ impl From<InnerType> for Type {
     }
 }
 
-pub(crate) fn parse_schema(data: &[u8]) -> Result<SchemaData, ParseError> {
-    let mut vec = data.to_vec();
-    vec.push(0xFF);
-    let mut cursor = std::io::Cursor::new(vec.as_slice());
+fn is_field_entry(
+    cursor: &std::io::Cursor<&[u8]>,
+) -> Result<bool, ParseError> {
+    let mut alt = cursor.clone();
+
+    consume_vu16(&mut alt)?;
+
+    if alt.consume_one()? != FIELD_INIT_MAGIC {
+        return Ok(false);
+    }
+
+    let next = alt.read_one()?;
+
+    Ok((FIXED_STR_LEN_OFFSET..=0xbf).contains(&next))
+}
+
+pub(crate) fn parse_schema(
+    data: &[u8],
+) -> Result<SchemaData, ParseError> {
+
+    let mut cursor =
+        std::io::Cursor::new(data);
+
     if cursor.consume_one()? != JOIN_MAGIC {
         return Err(ParseError::InvalidMagic);
     }
@@ -268,34 +293,60 @@ pub(crate) fn parse_schema(data: &[u8]) -> Result<SchemaData, ParseError> {
     if serializer != "schema" {
         return Err(ParseError::InvalidMagic);
     }
-    let length = consume_vu16(&mut cursor)?;
-    if cursor.fill_buf()?.len() < length as usize {
-        return Err(ParseError::IoError(std::io::Error::from(std::io::ErrorKind::UnexpectedEof)));
+
+    let length = consume_vu16(&mut cursor)? as usize;
+
+    let payload_start = cursor.position() as usize;
+
+    let payload_end = payload_start
+        .checked_add(length)
+        .ok_or(ParseError::InvalidSchema)?;
+
+    if data.len() < payload_end {
+        return Err(ParseError::IoError(
+            std::io::Error::from(
+                std::io::ErrorKind::UnexpectedEof
+            )
+        ));
     }
-    // 80 01 FF
+
+
     if cursor.consume_one()? != FIELD_INIT_MAGIC {
         return Err(ParseError::InvalidMagic);
     }
-    let root_schema_id = consume_vu16(&mut cursor)?;
+
+    let _types_ref =
+        consume_vu16(&mut cursor)?;
+
+    let mut root_schema_id = SchemaId(0);
+
+    if cursor.read_one()? == 0x81 {
+        cursor.consume_one()?;
+
+        root_schema_id =
+            SchemaId(consume_vu16(&mut cursor)?);
+    }
 
     if cursor.consume_one()? != TERM_MAGIC {
         return Err(ParseError::InvalidTermMagic);
     }
-    let mut field_entries: HashMap<u16, (String, Type)> =
+
+    let mut field_entries:
+        HashMap<u16, (String, Type)> =
         HashMap::new();
 
-    let mut schema_entries: HashMap<u16, Vec<(u16, SchemaType)>> =
+    let mut schema_entries:
+        HashMap<u16, Vec<(u16, SchemaType)>> =
         HashMap::new();
 
-    while (cursor.position() as usize) < data.len() {
+    while (cursor.position() as usize) < payload_end {
         let entry_start = cursor.position();
-        let mut field_cursor = cursor.clone();
 
-        if let Ok((id, name, ty)) =
-            consume_field_entry(&mut field_cursor)
-        {
+        if is_field_entry(&cursor)? {
+            let (id, name, ty) = consume_field_entry(&mut cursor, payload_end)?;
+
             field_entries.insert(id, (name, ty));
-            cursor = field_cursor;
+
             continue;
         }
         cursor.set_position(entry_start);
@@ -307,9 +358,12 @@ pub(crate) fn parse_schema(data: &[u8]) -> Result<SchemaData, ParseError> {
         schema_entries.insert(schema_id, fields);
     }
 
-
+    if cursor.position() as usize != payload_end {
+        return Err(ParseError::InvalidSchema);
+    }
 
     Ok(SchemaData {
+        root_schema_id,
         schema_entries,
         field_entries
     })
