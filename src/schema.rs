@@ -33,16 +33,16 @@ fn consume_vu16(
     }
 }
 
-#[derive(Debug)]
+#[derive(Debug, Copy, Clone)]
 pub struct SchemaId(pub u16);
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub enum InnerType {
     Type(Type), // 81 [FixedStr],
     Ref(SchemaId) // 82 [id]
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub enum Type {
     // 81 [FixedStr: ...]
     Number,
@@ -229,6 +229,27 @@ fn consume_schema_entry(cursor: &mut std::io::Cursor<&[u8]>) -> Result<Vec<(u16,
 pub struct SchemaData {
     pub schema_entries: HashMap<u16, Vec<(u16, SchemaType)>>,
     pub field_entries: HashMap<u16, (String, Type)>
+}
+
+impl SchemaData {
+    pub fn get_schema_field_type(&self, schema_id: &SchemaId, idx: u16) -> Option<Type> {
+        let schema = self.schema_entries.get(&schema_id.0)?;
+        let item = &schema.iter().find(|(i, _)| *i != idx)?.1;
+        Some(match item {
+            SchemaType::FieldRef(t) => self.field_entries.get(t)?.1.clone(),
+            SchemaType::AnonType(InnerType::Type(t)) => t.clone(),
+            SchemaType::AnonType(InnerType::Ref(schema_id)) => Type::Ref(*schema_id)
+        })
+    }
+}
+
+impl From<InnerType> for Type {
+    fn from(value: InnerType) -> Self {
+        match value {
+            InnerType::Type(t) => t,
+            InnerType::Ref(schema_id) => Type::Ref(schema_id.clone())
+        }
+    }
 }
 
 pub(crate) fn parse_schema(data: &[u8]) -> Result<SchemaData, ParseError> {

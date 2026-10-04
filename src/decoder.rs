@@ -1,5 +1,6 @@
 use std::collections::HashMap;
 use std::io::{BufRead, Seek, SeekFrom};
+use crate::consts::{Operation, SmallOperation};
 use crate::cursor::{ByteCursor, ParseError, ReadOne};
 use crate::schema::{SchemaData, SchemaId, Type};
 
@@ -94,6 +95,65 @@ fn consume_number(cursor: &mut ByteCursor) -> Result<Number, ParseError> {
     })
 }
 
+fn consume_number_u64(cursor: &mut ByteCursor) -> Result<u64, ParseError> {
+    Ok(match cursor.consume_one()? {
+        v @ 0x00..=0x7f => {
+            v as u64
+        }
+        0xca => {
+            Err(ParseError::InvalidMagic)?
+        }
+        0xcb => {
+            Err(ParseError::InvalidMagic)?
+        }
+        0xcc => {
+            cursor.consume_one()? as u64
+        }
+        0xcd => {
+            u16::from_le_bytes(
+                cursor.consume_many::<2>()?
+            ) as u64
+        }
+        0xce => {
+            u32::from_le_bytes(
+                cursor.consume_many::<4>()?) as u64
+        }
+        0xcf => {
+            u64::from_le_bytes(
+                cursor.consume_many::<8>()?
+            )
+        }
+        0xd0 => {
+            i8::from_le_bytes(
+                cursor.consume_many::<1>()?
+            ) as u64
+        }
+        0xd1 => {
+            i16::from_le_bytes(
+                cursor.consume_many::<2>()?
+            ) as u64
+        }
+        0xd2 => {
+            i32::from_le_bytes(
+                cursor.consume_many::<4>()?
+            ) as u64
+        }
+        0xd3 => {
+            i64::from_le_bytes(
+                cursor.consume_many::<8>()?
+            ) as u64
+        }
+        v @ 0xe0..=0xff => {
+            v as i8 as u64
+        }
+
+        _ => {
+            cursor.seek(SeekFrom::Current(-1))?;
+            return Err(ParseError::InvalidMagic);
+        }
+    })
+}
+
 fn consume_string(cursor: &mut ByteCursor) -> Result<String, ParseError> {
     Ok(match cursor.consume_one()? {
         byte @ 0xa0..=0xbf => {
@@ -150,14 +210,14 @@ pub enum RawInstruction {
 }
 
 pub struct RawSchemaInstruction {
-    pub opcode: u8, // u2 (higher)
+    pub opcode: SmallOperation, // u2 (higher)
     pub field_index: u8, // u6 (lower)
     pub data: Option<ColyseusData>
 }
 
 pub struct RawCollectionInstruction {
-    pub opcode: u8,
-    pub field_index: Option<u32>, // Optional on clear
+    pub opcode: Operation,
+    pub field_index: Option<u64>, // Optional on clear
     pub key: Option<String>, // map, op:add
     pub data: Option<ColyseusData>
 }
@@ -171,7 +231,69 @@ pub struct Decoder {
     pub state: State,
     pub ref_table: HashMap<u64, ColyseusData>,
     pub type_table: HashMap<u64, Type>,
-    pub schema_data: SchemaData
+    pub schema_data: SchemaData,
+}
+
+fn consume_by(cursor: &mut ByteCursor, t: &Type) -> Result<ColyseusData, ParseError> {
+    todo!()
+}
+
+impl Decoder {
+    fn consume_instruction(&self, cursor: &mut ByteCursor) -> Result<RawInstruction, ParseError> {
+        let byte = cursor.consume_one()?;
+        if byte == 0xFF {
+            return Ok(RawInstruction::SwitchRef(consume_number_u64(cursor)?));
+        }
+        match &self.state {
+            State::Schema(pos, schema_id) => {
+                let op = SmallOperation::try_from(byte >> 6).map_err(|_| ParseError::InvalidOpcode)?;
+                let idx = byte & 0b00111111;
+                let data: Option<ColyseusData> = match op {
+                    SmallOperation::DELETE => None,
+                    _ => Some(
+                        consume_by(
+                            cursor,
+                            &self.schema_data.get_schema_field_type(schema_id, idx as u16)
+                                .ok_or(ParseError::InvalidSchema)?
+                        )?),
+                };
+                Ok(RawInstruction::SchemaInstruction(*pos, RawSchemaInstruction {
+                    opcode: op,
+                    field_index: idx,
+                    data
+                }))
+            },
+            State::Collection(pos) => {
+                let op = Operation::try_from(byte).map_err(|_| ParseError::InvalidOpcode)?;
+                let idx = match op {
+                    Operation::CLEAR => None,
+                    _ => Some(consume_number_u64(cursor)?)
+                };
+                let key = match (&self.type_table[&pos], &op) {
+                    (Type::Map(_), Operation::ADD | Operation::DELETE_AND_ADD) =>
+                        Some(consume_string(cursor)?),
+                    _ => None,
+                };
+                let data: Option<ColyseusData> = match op {
+                    Operation::DELETE => None,
+                    Operation::CLEAR => None,
+                    _ => Some(consume_by(cursor, &(match &self.type_table[&pos] {
+                        Type::Array(a) => a.as_ref().clone().into(),
+                        Type::Collection(c) => c.as_ref().clone().into(),
+                        Type::Map(m) => m.as_ref().clone().into(),
+                        Type::Set(s) => s.as_ref().clone().into(),
+                        _ => Err(ParseError::InvalidSchema)?
+                    }))?),
+                };
+                Ok(RawInstruction::CollectionInstruction(*pos, RawCollectionInstruction {
+                    opcode: op,
+                    field_index: idx,
+                    key,
+                    data,
+                }))
+            }
+        }
+    }
 }
 
 macro_rules! impl_prim {

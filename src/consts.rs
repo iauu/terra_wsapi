@@ -38,3 +38,31 @@ pub enum SmallOperation {
     DELETE_AND_ADD = 3
 }
 
+impl TryFrom<u8> for SmallOperation {
+    type Error = ();
+    fn try_from(value: u8) -> Result<Self, Self::Error> {
+        match value {
+            0 => Ok(Self::ADD),
+            1 => Ok(Self::REPLACE),
+            2 => Ok(Self::DELETE),
+            3 => Ok(Self::DELETE_AND_ADD),
+            _ => Err(())
+        }
+    }
+}
+
+
+impl TryFrom<u8> for Operation {
+    type Error = ();
+    fn try_from(value: u8) -> Result<Self, Self::Error> {
+        match value {
+            0 => Ok(Self::REPLACE),
+            1 => Ok(Self::TOUCH),
+            10 => Ok(Self::CLEAR),
+            64 => Ok(Self::DELETE),
+            128 => Ok(Self::ADD),
+            192 => Ok(Self::DELETE_AND_ADD),   
+            _ => Err(())
+        }
+    }
+}

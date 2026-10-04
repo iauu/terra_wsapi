@@ -14,6 +14,12 @@ pub enum ParseError {
     IoError(#[from] std::io::Error),
     #[error("Utf-8 conversion error")]
     FromUtf8Error(#[from] FromUtf8Error),
+    #[error("Invalid type")]
+    InvalidType,
+    #[error("Invalid opcode")]
+    InvalidOpcode,
+    #[error("Invalid schema")]
+    InvalidSchema,
 }
 
 
