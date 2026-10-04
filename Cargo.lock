@@ -1634,6 +1634,7 @@ dependencies = [
  "axum-extra",
  "cfg-if",
  "futures-util",
+ "headers",
  "indexmap",
  "paste",
  "rand 0.10.3",
@@ -1752,7 +1753,11 @@ checksum = "17a073bfed563fa236697a068031408a93cd9522e08abf9933ead3e73411bd71"
 dependencies = [
  "futures-util",
  "log",
+ "rustls",
+ "rustls-native-certs",
+ "rustls-pki-types",
  "tokio",
+ "tokio-rustls",
  "tungstenite 0.30.0",
 ]
 
@@ -1968,6 +1973,8 @@ dependencies = [
  "httparse",
  "log",
  "rand 0.10.3",
+ "rustls",
+ "rustls-pki-types",
  "sha1 0.11.0",
  "thiserror",
 ]

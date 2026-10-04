@@ -18,7 +18,7 @@ use std::net::SocketAddr;
 use std::sync::Arc;
 use std::time::Duration;
 use thiserror::Error;
-use tokio::sync::{Mutex, RwLock};
+use tokio::sync::{watch, Mutex, RwLock};
 use tower_http::trace::{DefaultMakeSpan, TraceLayer};
 use tracing::info;
 use tracing_subscriber::{layer::SubscriberExt, util::SubscriberInitExt};
@@ -27,6 +27,7 @@ use rand::Rng;
 
 use std::{env, thread};
 use std::fmt::format;
+use std::ops::Deref;
 use std::path::PathBuf;
 use cfg_if::cfg_if;
 use reqwest::Url;
@@ -37,6 +38,7 @@ use tokio_tungstenite::tungstenite::Message;
 use tracing::log::warn;
 use crate::cursor::{ByteCursor, ParseError};
 use crate::decoder::Decoder;
+use tokio::time::sleep;
 
 
 #[derive(Debug, Error)]
@@ -70,15 +72,13 @@ pub enum WsError {
 }
 
 struct ServerState {
-    decoder: Option<Decoder>,
     broadcast: tokio::sync::watch::Receiver<serde_json::Value>,
 }
 
 impl ServerState {
-    pub fn new(sender: &tokio::sync::watch::Receiver<serde_json::Value>) -> Self {
+    pub fn new(recv: &tokio::sync::watch::Receiver<serde_json::Value>) -> Self {
         Self {
-            decoder: None,
-            broadcast: sender.clone(),
+            broadcast: recv.clone(),
         }
     }
 }
@@ -145,7 +145,7 @@ fn encode_pong_check(
 
 async fn ws_task(
     jwt: String,
-    server_state: Arc<RwLock<ServerState>>,
+    tx: &mut watch::Sender<serde_json::Value>,
 ) -> Result<(), WsError> {
     let client = reqwest::Client::new();
 
@@ -165,10 +165,12 @@ async fn ws_task(
     let resp: MatchMakeResp = result.json().await?;
     let ws_url = format!(
         "wss://game.terra.hackclub.com/{}/{}?sessionId={}",
-        resp.processId,
-        resp.roomId,
-        resp.sessionId,
+        &resp.processId,
+        &resp.roomId,
+        &resp.sessionId,
     );
+
+    tracing::info!("Connecting to {}", &ws_url);
 
     let request = ws_url.into_client_request()?;
 
@@ -215,6 +217,7 @@ async fn ws_task(
                             );
 
                         decoder.apply(&mut cursor)?;
+                        let _ = tx.send(decoder.to_json()?);
 
                     }
                     0x0f => {
@@ -230,6 +233,7 @@ async fn ws_task(
                             );
 
                         decoder.apply(&mut cursor)?;
+                        let _ = tx.send(decoder.to_json()?);
                     }
                     0x0d => {
                         if let Some(ping) =
@@ -278,18 +282,35 @@ async fn ws_task(
     Ok(())
 }
 
+async fn ws_output(
+    ws: WebSocketUpgrade,
+    _user_agent: Option<TypedHeader<headers::UserAgent>>,
+    ConnectInfo(_addr): ConnectInfo<SocketAddr>,
+    State(state): State<Arc<RwLock<ServerState>>>,
+) -> impl IntoResponse {
+    let watch_rx = state.read().await.broadcast.clone();
+    ws.on_upgrade(|mut socket| async move {
+        while let Ok(change) = watch_rx.has_changed() {
+            while change {
+                let data = watch_rx.borrow().deref().clone();
+                let _ = socket
+                    .send(axum::extract::ws::Message::Text(serde_json::to_string(&data).unwrap().into())).await;
+            }
+            sleep(Duration::from_millis(150)).await;
+        }
+    })
+}
+
 
 #[tokio::main]
 async fn main() {
     let (mut tx, rx) = tokio::sync::watch::channel(serde_json::Value::Null);
     let state = Arc::new(RwLock::new(ServerState::new(&rx)));
 
-    let cloned = state.clone();
 
     tokio::spawn(async move {
         loop {
-            let c1 = cloned.clone();
-            match ws_task(env::var("JWT").unwrap(), c1).await {
+            match ws_task(env::var("JWT").unwrap(), &mut tx).await {
                 Ok(()) => {},
                 Err(e) => {
                     tracing::error!("Websocket connection error: {}", e);
@@ -311,6 +332,7 @@ async fn main() {
 
     let _clone = state.clone();
     let app = Router::new()
+        .route("/ws", any(ws_output))
         .with_state(_clone)
         .layer(
             TraceLayer::new_for_http()
