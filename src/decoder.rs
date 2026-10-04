@@ -2,6 +2,7 @@ use std::collections::HashMap;
 use std::io::{BufRead, Seek, SeekFrom};
 use crate::consts::{Operation, SmallOperation};
 use crate::cursor::{ByteCursor, ParseError, ReadOne};
+use crate::schema;
 use crate::schema::{SchemaData, SchemaId, Type};
 
 #[derive(Debug, Clone, Copy)]
@@ -307,6 +308,7 @@ pub struct Decoder {
     pub ref_table: HashMap<u64, ColyseusData>,
     pub type_table: HashMap<u64, Type>,
     pub schema_data: SchemaData,
+    pub root_schema_id: SchemaId,
 }
 
 fn consume_by(cursor: &mut ByteCursor, t: &Type) -> Result<ColyseusData, ParseError> {
@@ -640,6 +642,51 @@ impl Decoder {
             }
         }
         Ok(())
+    }
+
+    pub fn apply(&mut self, cursor: &mut ByteCursor) -> Result<(), ParseError> {
+        match cursor.read_one()? {
+            0x0e | 0x0f => {
+                self.state = State::Schema(0, self.root_schema_id.clone());
+                cursor.consume_one()?;
+                while !cursor.fill_buf()?.is_empty() {
+                    let inst = self.consume_instruction(cursor)?;
+                    self.run_instruction(&inst)?;
+                }
+                Ok(())
+            },
+            _ => Err(ParseError::InvalidSchema),
+        }
+    }
+
+    pub fn new(
+        root_schema_id: SchemaId,
+        schema_data: SchemaData
+    ) -> Self {
+        let mut decoder = Self {
+            state: State::Schema(
+                0,
+                root_schema_id,
+            ),
+            ref_table: Default::default(),
+            type_table: Default::default(),
+            schema_data,
+            root_schema_id
+        };
+
+        decoder.ref_table.insert(
+                0,
+                ColyseusData::Schema(
+                    root_schema_id,
+                    HashMap::new(),
+                ),
+            );
+
+        decoder.type_table.insert(
+                0,
+                Type::Ref(root_schema_id),
+            );
+        decoder
     }
 }
 
