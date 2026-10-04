@@ -197,6 +197,79 @@ pub enum Value {
     String(String)
 }
 
+impl From<Number> for Value {
+    fn from(value: Number) -> Self {
+        match value {
+            Number::UInt(u) => Value::UNumber(u),
+            Number::Int(i) => Value::INumber(i),
+            Number::Float(f) => Value::Float(f),
+        }
+    }
+}
+
+impl From<bool> for Value {
+    fn from(value: bool) -> Self {
+        Value::Boolean(value)
+    }
+}
+
+impl From<String> for Value {
+    fn from(value: String) -> Self {
+        Value::String(value)
+    }
+}
+
+macro_rules! from_inum {
+    ($t:ty) => {
+        impl From<$t> for Value {
+            fn from(value: $t) -> Self {
+                Value::INumber(value as i64)
+            }
+        }
+    };
+}
+
+from_inum!(i8);
+from_inum!(i16);
+from_inum!(i32);
+from_inum!(i64);
+
+macro_rules! from_unum {
+    ($t:ty) => {
+        impl From<$t> for Value {
+            fn from(value: $t) -> Self {
+                Value::UNumber(value as i64)
+            }
+        }
+    };
+}
+
+from_inum!(u8);
+from_inum!(u16);
+from_inum!(u32);
+from_inum!(u64);
+
+macro_rules! from_fnum {
+    ($t:ty) => {
+        impl From<$t> for Value {
+            fn from(value: $t) -> Self {
+                Value::Float(value as f64)
+            }
+        }
+    };
+}
+
+from_fnum!(f32);
+from_fnum!(f64);
+
+macro_rules! auto_consume_into {
+    ($name:ident, $cursor:expr) => {
+        ::paste::paste! {
+            ColyseusData::Data( [ <consume_ $name > ]($cursor)?.into())
+        }
+    };
+}
+
 pub enum ColyseusData {
     Ref(u64),
     Data(Value),
@@ -235,7 +308,24 @@ pub struct Decoder {
 }
 
 fn consume_by(cursor: &mut ByteCursor, t: &Type) -> Result<ColyseusData, ParseError> {
-    todo!()
+    Ok(match t {
+        Type::Number =>  auto_consume_into!(number, cursor),
+        Type::Float32 => auto_consume_into!(f32, cursor),
+        Type::Float64 => auto_consume_into!(f64, cursor),
+        Type::Int8 =>  auto_consume_into!(i8, cursor),
+        Type::Uint8 =>  auto_consume_into!(u8, cursor),
+        Type::Int16 =>  auto_consume_into!(i16, cursor),
+        Type::Uint16 =>  auto_consume_into!(u16, cursor),
+        Type::Int32 =>  auto_consume_into!(i32, cursor),
+        Type::Uint32 =>  auto_consume_into!(u32, cursor),
+        Type::Int64 =>  auto_consume_into!(i64, cursor),
+        Type::Uint64 =>  auto_consume_into!(u64, cursor),
+        Type::String =>  auto_consume_into!(string, cursor),
+        Type::Boolean =>  auto_consume_into!(boolean, cursor),
+        Type::Ref(_) | Type::Map(_) | Type::Array(_) | Type::Collection(_) | Type::Set(_) => {
+            ColyseusData::Ref(consume_number_u64(cursor)?)
+        }
+    })
 }
 
 impl Decoder {
@@ -254,7 +344,7 @@ impl Decoder {
                         consume_by(
                             cursor,
                             &self.schema_data.get_schema_field_type(schema_id, idx as u16)
-                                .ok_or(ParseError::InvalidSchema)?
+                                .ok_or(ParseError::InvalidSchema)?,
                         )?),
                 };
                 Ok(RawInstruction::SchemaInstruction(*pos, RawSchemaInstruction {
@@ -277,13 +367,16 @@ impl Decoder {
                 let data: Option<ColyseusData> = match op {
                     Operation::DELETE => None,
                     Operation::CLEAR => None,
-                    _ => Some(consume_by(cursor, &(match &self.type_table[&pos] {
-                        Type::Array(a) => a.as_ref().clone().into(),
-                        Type::Collection(c) => c.as_ref().clone().into(),
-                        Type::Map(m) => m.as_ref().clone().into(),
-                        Type::Set(s) => s.as_ref().clone().into(),
-                        _ => Err(ParseError::InvalidSchema)?
-                    }))?),
+                    _ => Some(consume_by(
+                        cursor,
+                        &(match &self.type_table[&pos] {
+                            Type::Array(a) => a.as_ref().clone().into(),
+                            Type::Collection(c) => c.as_ref().clone().into(),
+                            Type::Map(m) => m.as_ref().clone().into(),
+                            Type::Set(s) => s.as_ref().clone().into(),
+                            _ => Err(ParseError::InvalidSchema)?
+                        }),
+                    )?),
                 };
                 Ok(RawInstruction::CollectionInstruction(*pos, RawCollectionInstruction {
                     opcode: op,
