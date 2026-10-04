@@ -45,7 +45,7 @@ pub enum InnerType {
 #[derive(Debug)]
 pub enum Type {
     // 81 [FixedStr: ...]
-    Number, // f64
+    Number,
     Float32, // f32
     Float64, // f64
     Int8, // i8

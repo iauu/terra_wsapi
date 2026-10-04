@@ -1,7 +1,7 @@
 use std::collections::HashMap;
 use std::io::{BufRead, Seek, SeekFrom};
 use crate::cursor::{ByteCursor, ParseError, ReadOne};
-use crate::schema::{SchemaData, SchemaId};
+use crate::schema::{SchemaData, SchemaId, Type};
 
 #[derive(Debug, Clone, Copy)]
 pub enum Number {
@@ -157,7 +157,7 @@ pub struct RawSchemaInstruction {
 
 pub struct RawCollectionInstruction {
     pub opcode: u8,
-    pub field_index: u32,
+    pub field_index: Option<u32>, // Optional on clear
     pub key: Option<String>, // map, op:add
     pub data: Option<ColyseusData>
 }
@@ -170,5 +170,28 @@ pub enum State {
 pub struct Decoder {
     pub state: State,
     pub ref_table: HashMap<u64, ColyseusData>,
+    pub type_table: HashMap<u64, Type>,
     pub schema_data: SchemaData
 }
+
+macro_rules! impl_prim {
+    ($t:ty, $s:literal) => {
+        ::paste::paste! {
+            fn [<consume_ $t>](cursor: &mut $crate::cursor::ByteCursor) -> Result<$t, $crate::cursor::ParseError> {
+                let bytes = cursor.consume_many::<$s>()?;
+                Ok($t::from_le_bytes(bytes))
+            }
+        }
+    };
+}
+
+impl_prim!(u8, 1);
+impl_prim!(u16, 2);
+impl_prim!(u32, 4);
+impl_prim!(u64, 8);
+impl_prim!(i8, 1);
+impl_prim!(i16, 2);
+impl_prim!(i32, 4);
+impl_prim!(i64, 8);
+impl_prim!(f32, 4);
+impl_prim!(f64, 8);
