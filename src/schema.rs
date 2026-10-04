@@ -234,7 +234,7 @@ pub struct SchemaData {
 impl SchemaData {
     pub fn get_schema_field_type(&self, schema_id: &SchemaId, idx: u16) -> Option<Type> {
         let schema = self.schema_entries.get(&schema_id.0)?;
-        let item = &schema.iter().find(|(i, _)| *i != idx)?.1;
+        let item = &schema.iter().find(|(i, _)| *i == idx)?.1;
         Some(match item {
             SchemaType::FieldRef(t) => self.field_entries.get(t)?.1.clone(),
             SchemaType::AnonType(InnerType::Type(t)) => t.clone(),
