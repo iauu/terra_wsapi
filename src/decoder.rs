@@ -187,6 +187,7 @@ fn consume_boolean(cursor: &mut ByteCursor) -> Result<bool, ParseError> {
     Ok(cursor.consume_one()? != 0x00)
 }
 
+#[derive(Clone)]
 pub enum Value {
     Boolean(bool),
     INumber(i64),
@@ -270,6 +271,7 @@ macro_rules! auto_consume_into {
     };
 }
 
+#[derive(Clone)]
 pub enum ColyseusData {
     Ref(u64),
     Data(Value),
@@ -386,6 +388,258 @@ impl Decoder {
                 }))
             }
         }
+    }
+
+    fn register_ref(
+        &mut self,
+        data: &ColyseusData,
+        ty: &Type,
+    ) -> Result<(), ParseError> {
+        let ColyseusData::Ref(ref_id) = data else {
+            return Ok(());
+        };
+
+        self.type_table.insert(*ref_id, ty.clone());
+
+        if self.ref_table.contains_key(ref_id) {
+            return Ok(());
+        }
+
+        let value = match ty {
+            Type::Ref(schema_id) => {
+                ColyseusData::Schema(
+                    *schema_id,
+                    HashMap::new(),
+                )
+            }
+
+            Type::Map(_) => {
+                ColyseusData::Data(
+                    Value::Map(HashMap::new())
+                )
+            }
+
+            Type::Array(_)
+            | Type::Collection(_)
+            | Type::Set(_) => {
+                ColyseusData::Data(
+                    Value::Vec(HashMap::new())
+                )
+            }
+            _ => {
+                return Err(ParseError::InvalidSchema);
+            }
+        };
+
+        self.ref_table.insert(*ref_id, value);
+
+        Ok(())
+    }
+
+    fn run_instruction(&mut self, instruction: &RawInstruction) ->Result<(), ParseError> {
+        match instruction {
+            RawInstruction::SwitchRef(ref_id) => {
+                match &self.ref_table[ref_id] {
+                    ColyseusData::Ref(refence) => { return Err(ParseError::InvalidSchema); },
+                    ColyseusData::Data(Value::Map(_) | Value::Vec(_)) => {
+                        self.state = State::Collection(*ref_id);
+
+                    },
+                    ColyseusData::Data(_) => {
+                        return Err(ParseError::InvalidSchema);
+                    }
+                    ColyseusData::Schema(schema_id, _) => {
+                        self.state = State::Schema(*ref_id, schema_id.clone());
+                    }
+                }
+            }
+            RawInstruction::SchemaInstruction(
+                ref_id,
+                inst,
+            ) => {
+                let schema_id = match self.ref_table.get(ref_id) {
+                    Some(ColyseusData::Schema(schema_id, _)) => {
+                        *schema_id
+                    }
+
+                    _ => {
+                        return Err(
+                            ParseError::InvalidSchema
+                        );
+                    }
+                };
+
+                let field_type = self.schema_data
+                    .get_schema_field_type(
+                        &schema_id,
+                        inst.field_index as u16,
+                    )
+                    .ok_or(ParseError::InvalidSchema)?;
+
+                if let Some(data) = &inst.data {
+                    self.register_ref(
+                        data,
+                        &field_type,
+                    )?;
+                }
+
+                let target = self.ref_table
+                    .get_mut(ref_id)
+                    .ok_or(ParseError::InvalidSchema)?;
+
+                let ColyseusData::Schema(_, fields) = target else {
+                    return Err(
+                        ParseError::InvalidSchema
+                    );
+                };
+
+                match inst.opcode {
+                    SmallOperation::DELETE => {
+                        fields.remove(
+                            &(inst.field_index as u64)
+                        );
+                    }
+
+                    _ => {
+                        let data = inst.data
+                            .clone()
+                            .ok_or(
+                                ParseError::InvalidSchema
+                            )?;
+
+                        fields.insert(
+                            inst.field_index as u64,
+                            data,
+                        );
+                    }
+                }
+            }
+            RawInstruction::CollectionInstruction(
+                ref_id,
+                inst,
+            ) => {
+                let collection_type = self.type_table
+                    .get(ref_id)
+                    .cloned()
+                    .ok_or(ParseError::InvalidSchema)?;
+                let inner_type: Type = match &collection_type {
+                    Type::Map(inner)
+                    | Type::Array(inner)
+                    | Type::Collection(inner)
+                    | Type::Set(inner) => {
+                        inner.as_ref().clone().into()
+                    }
+
+                    _ => {
+                        return Err(
+                            ParseError::InvalidSchema
+                        );
+                    }
+                };
+                if let Some(data) = &inst.data {
+                    self.register_ref(
+                        data,
+                        &inner_type,
+                    )?;
+                }
+
+                let target = self.ref_table
+                    .get_mut(ref_id)
+                    .ok_or(ParseError::InvalidSchema)?;
+
+                match target {
+                    ColyseusData::Data(
+                        Value::Map(entries)
+                    ) => {
+                        match inst.opcode {
+                            Operation::CLEAR => {
+                                entries.clear();
+                            }
+
+                            Operation::DELETE => {
+                                let index = inst.field_index
+                                    .ok_or(
+                                        ParseError::InvalidSchema
+                                    )?;
+
+                                entries.remove(&index);
+                            }
+
+                            _ => {
+                                let index = inst.field_index
+                                    .ok_or(
+                                        ParseError::InvalidSchema
+                                    )?;
+
+                                let data = inst.data
+                                    .clone()
+                                    .ok_or(
+                                        ParseError::InvalidSchema
+                                    )?;
+
+                                let key = if let Some(key) = &inst.key {
+                                    key.clone()
+                                } else {
+                                    entries
+                                        .get(&index)
+                                        .map(|(key, _)| {
+                                            key.clone()
+                                        })
+                                        .ok_or(
+                                            ParseError::InvalidSchema
+                                        )?
+                                };
+
+                                entries.insert(
+                                    index,
+                                    (key, data),
+                                );
+                            }
+                        }
+                    }
+                    ColyseusData::Data(
+                        Value::Vec(entries)
+                    ) => {
+                        match inst.opcode {
+                            Operation::CLEAR => {
+                                entries.clear();
+                            }
+
+                            Operation::DELETE => {
+                                let index = inst.field_index
+                                    .ok_or(
+                                        ParseError::InvalidSchema
+                                    )?;
+
+                                entries.remove(&index);
+                            }
+
+                            _ => {
+                                let index = inst.field_index
+                                    .ok_or(
+                                        ParseError::InvalidSchema
+                                    )?;
+
+                                let data = inst.data
+                                    .clone()
+                                    .ok_or(
+                                        ParseError::InvalidSchema
+                                    )?;
+
+                                entries.insert(
+                                    index,
+                                    data,
+                                );
+                            }
+                        }
+                    }
+                    _ => {
+                        return Err(ParseError::InvalidSchema);
+                    }
+                }
+            }
+        }
+        Ok(())
     }
 }
 
