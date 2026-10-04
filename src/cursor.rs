@@ -48,7 +48,7 @@ pub trait ReadOne: BufRead {
         self.consume(N);
         Ok(data)
     }
-    
+
     fn read_n(&mut self, len: usize) -> Result<&[u8], ParseError> {
         let available = self.fill_buf()?;
 
@@ -61,8 +61,8 @@ pub trait ReadOne: BufRead {
         let buf = &self.fill_buf()?[..len];
         Ok(buf)
     }
-    
-    fn consume_n(&mut self, len: usize) -> Result<&[u8], ParseError> {
+
+    fn consume_n(&mut self, len: usize) -> Result<Vec<u8>, ParseError> {
         let available = self.fill_buf()?;
 
         if available.len() < len as usize {
@@ -71,9 +71,8 @@ pub trait ReadOne: BufRead {
             ).into());
         }
 
+        let buf = self.fill_buf()?[..len].into();
         self.consume(len);
-
-        let buf = &self.fill_buf()?[..len];
         Ok(buf)
     }
 }
