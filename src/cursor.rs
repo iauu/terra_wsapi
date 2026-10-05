@@ -47,7 +47,7 @@ pub trait ReadOne: BufRead {
                 std::io::ErrorKind::UnexpectedEof
             ).into());
         }
-        buf.copy_from_slice(data_buf);
+        buf.copy_from_slice(&data_buf[..N]);
         Ok(buf)
     }
 
