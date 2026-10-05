@@ -237,7 +237,7 @@ async fn ws_task(
                         let decoder = decoder
                             .as_mut()
                             .ok_or(
-                                ParseError::InvalidSchema
+                                ParseError::InvalidSchema("Unable to obtain decoder")
                             )?;
 
                         let mut cursor =
@@ -255,7 +255,7 @@ async fn ws_task(
                         let decoder = decoder
                             .as_mut()
                             .ok_or(
-                                ParseError::InvalidSchema
+                                ParseError::InvalidSchema("Unable to obtain decoder")
                             )?;
 
                         let mut cursor =
@@ -349,6 +349,7 @@ async fn main() {
                     tracing::error!("Websocket connection error: {}", e);
                 }
             }
+            sleep(Duration::from_secs(5)).await;
         }
     });
 

@@ -348,7 +348,21 @@ impl Decoder {
                         consume_by(
                             cursor,
                             &self.schema_data.get_schema_field_type(schema_id, idx as u16)
-                                .ok_or(ParseError::InvalidSchema)?,
+                                .or_else(|| {
+                                    tracing::error!(
+                                        "MISSING SCHEMA FIELD: \
+                                         ref_id={}, schema_id={}, byte=0x{:02X}, \
+                                         op={:?}, field_index={}, layout_ref={:?}",
+                                        pos,
+                                        schema_id.0,
+                                        byte,
+                                        op,
+                                        idx,
+                                        self.schema_data.schema_refs.get(&schema_id.0),
+                                    );
+                                    None
+                                })
+                                .ok_or(ParseError::InvalidSchema("missing schema field type"))?,
                         )?),
                 };
                 Ok(RawInstruction::SchemaInstruction(*pos, RawSchemaInstruction {
@@ -378,7 +392,7 @@ impl Decoder {
                             Type::Collection(c) => c.as_ref().clone().into(),
                             Type::Map(m) => m.as_ref().clone().into(),
                             Type::Set(s) => s.as_ref().clone().into(),
-                            _ => Err(ParseError::InvalidSchema)?
+                            _ => Err(ParseError::InvalidSchema("invalid type when expecting collection"))?
                         }),
                     )?),
                 };
@@ -429,7 +443,7 @@ impl Decoder {
                 )
             }
             _ => {
-                return Err(ParseError::InvalidSchema);
+                return Err(ParseError::InvalidSchema("invalid type when expecting reference based value"));
             }
         };
 
@@ -442,13 +456,13 @@ impl Decoder {
         match instruction {
             RawInstruction::SwitchRef(ref_id) => {
                 match &self.ref_table[ref_id] {
-                    ColyseusData::Ref(refence) => { return Err(ParseError::InvalidSchema); },
+                    ColyseusData::Ref(refence) => { return Err(ParseError::InvalidSchema("Invalid data when expecting referencable data (found ref)")); },
                     ColyseusData::Data(Value::Map(_) | Value::Vec(_)) => {
                         self.state = State::Collection(*ref_id);
 
                     },
                     ColyseusData::Data(_) => {
-                        return Err(ParseError::InvalidSchema);
+                        return Err(ParseError::InvalidSchema("Invalid data when expecting referencable data (found prim_data)"));
                     }
                     ColyseusData::Schema(schema_id, _) => {
                         self.state = State::Schema(*ref_id, schema_id.clone());
@@ -466,7 +480,7 @@ impl Decoder {
 
                     _ => {
                         return Err(
-                            ParseError::InvalidSchema
+                            ParseError::InvalidSchema("invalid data when expecting schema data")
                         );
                     }
                 };
@@ -476,7 +490,7 @@ impl Decoder {
                         &schema_id,
                         inst.field_index as u16,
                     )
-                    .ok_or(ParseError::InvalidSchema)?;
+                    .ok_or(ParseError::InvalidSchema("schema field type not found"))?;
 
                 if let Some(data) = &inst.data {
                     self.register_ref(
@@ -487,11 +501,11 @@ impl Decoder {
 
                 let target = self.ref_table
                     .get_mut(ref_id)
-                    .ok_or(ParseError::InvalidSchema)?;
+                    .ok_or(ParseError::InvalidSchema("unable to find ref data"))?;
 
                 let ColyseusData::Schema(_, fields) = target else {
                     return Err(
-                        ParseError::InvalidSchema
+                        ParseError::InvalidSchema("invalid data when expecting schema data")
                     );
                 };
 
@@ -506,7 +520,7 @@ impl Decoder {
                         let data = inst.data
                             .clone()
                             .ok_or(
-                                ParseError::InvalidSchema
+                                ParseError::InvalidSchema("unable to find data from instruction")
                             )?;
 
                         fields.insert(
@@ -523,7 +537,7 @@ impl Decoder {
                 let collection_type = self.type_table
                     .get(ref_id)
                     .cloned()
-                    .ok_or(ParseError::InvalidSchema)?;
+                    .ok_or(ParseError::InvalidSchema("collection ref missing from type_table"))?;
                 let inner_type: Type = match &collection_type {
                     Type::Map(inner)
                     | Type::Array(inner)
@@ -534,7 +548,7 @@ impl Decoder {
 
                     _ => {
                         return Err(
-                            ParseError::InvalidSchema
+                            ParseError::InvalidSchema("Invalid type when expecting collection")
                         );
                     }
                 };
@@ -547,7 +561,7 @@ impl Decoder {
 
                 let target = self.ref_table
                     .get_mut(ref_id)
-                    .ok_or(ParseError::InvalidSchema)?;
+                    .ok_or(ParseError::InvalidSchema("SwitchRef target missing from ref_table"))?;
 
                 match target {
                     ColyseusData::Data(
@@ -561,7 +575,7 @@ impl Decoder {
                             Operation::DELETE => {
                                 let index = inst.field_index
                                     .ok_or(
-                                        ParseError::InvalidSchema
+                                        ParseError::InvalidSchema("missing field index from inst")
                                     )?;
 
                                 entries.remove(&index);
@@ -570,13 +584,13 @@ impl Decoder {
                             _ => {
                                 let index = inst.field_index
                                     .ok_or(
-                                        ParseError::InvalidSchema
+                                        ParseError::InvalidSchema("Missing inst field_index from instruction")
                                     )?;
 
                                 let data = inst.data
                                     .clone()
                                     .ok_or(
-                                        ParseError::InvalidSchema
+                                        ParseError::InvalidSchema("Missing inst data from instruction")
                                     )?;
 
                                 let key = if let Some(key) = &inst.key {
@@ -588,7 +602,7 @@ impl Decoder {
                                             key.clone()
                                         })
                                         .ok_or(
-                                            ParseError::InvalidSchema
+                                            ParseError::InvalidSchema("sync_index missing from collection")
                                         )?
                                 };
 
@@ -610,7 +624,7 @@ impl Decoder {
                             Operation::DELETE => {
                                 let index = inst.field_index
                                     .ok_or(
-                                        ParseError::InvalidSchema
+                                        ParseError::InvalidSchema("Missing field index from inst")
                                     )?;
 
                                 entries.remove(&index);
@@ -619,13 +633,13 @@ impl Decoder {
                             _ => {
                                 let index = inst.field_index
                                     .ok_or(
-                                        ParseError::InvalidSchema
+                                        ParseError::InvalidSchema("Missing inst field_index from instruction")
                                     )?;
 
                                 let data = inst.data
                                     .clone()
                                     .ok_or(
-                                        ParseError::InvalidSchema
+                                        ParseError::InvalidSchema("Missing inst data from instruction")
                                     )?;
 
                                 entries.insert(
@@ -636,7 +650,7 @@ impl Decoder {
                         }
                     }
                     _ => {
-                        return Err(ParseError::InvalidSchema);
+                        return Err(ParseError::InvalidSchema("Expecting collection data from inst"));
                     }
                 }
             }
@@ -655,7 +669,7 @@ impl Decoder {
                 }
                 Ok(())
             },
-            _ => Err(ParseError::InvalidSchema),
+            _ => Err(ParseError::InvalidSchema("Invalid apply packet")),
         }
     }
 
@@ -701,14 +715,14 @@ impl Decoder {
             let field_index: u16 =
                 (*field_index)
                     .try_into()
-                    .map_err(|_| ParseError::InvalidSchema)?;
+                    .map_err(|_| ParseError::InvalidSchema("Invalid field index"))?;
 
             let name = self.schema_data
                 .get_schema_field_name(
                     schema_id,
                     field_index,
                 )
-                .ok_or(ParseError::InvalidSchema)?;
+                .ok_or(ParseError::InvalidSchema("Missing field name"))?;
 
             object.insert(
                 name.to_owned(),
@@ -731,7 +745,7 @@ impl Decoder {
             ColyseusData::Ref(ref_id) => {
                 let target = self.ref_table
                     .get(ref_id)
-                    .ok_or(ParseError::InvalidSchema)?;
+                    .ok_or(ParseError::InvalidSchema("Unable to find ref data"))?;
 
                 self.data_to_json(target)
             }
@@ -794,7 +808,7 @@ impl Decoder {
     ) -> Result<serde_json::Value, ParseError> {
         let root = self.ref_table
             .get(&0)
-            .ok_or(ParseError::InvalidSchema)?;
+            .ok_or(ParseError::InvalidSchema("Invalid ref"))?;
 
         self.data_to_json(root)
     }

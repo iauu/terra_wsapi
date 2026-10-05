@@ -18,8 +18,8 @@ pub enum ParseError {
     InvalidType,
     #[error("Invalid opcode")]
     InvalidOpcode,
-    #[error("Invalid schema")]
-    InvalidSchema,
+    #[error("Invalid schema: {0}")]
+    InvalidSchema(&'static str),
     #[error("MsgPack")]
     MsgPackError,
 }

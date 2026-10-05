@@ -233,13 +233,18 @@ fn consume_schema_entry(cursor: &mut std::io::Cursor<&[u8]>) -> Result<Vec<(u16,
 
 pub struct SchemaData {
     pub root_schema_id: SchemaId,
+
     pub schema_entries: HashMap<u16, Vec<(u16, SchemaType)>>,
-    pub field_entries: HashMap<u16, (String, Type)>
+
+    pub field_entries: HashMap<u16, (String, Type)>,
+
+    pub schema_refs: HashMap<u16, u16>,
 }
 
 impl SchemaData {
     pub fn get_schema_field_type(&self, schema_id: &SchemaId, idx: u16) -> Option<Type> {
-        let schema = self.schema_entries.get(&schema_id.0)?;
+        let schema_ref = self.schema_refs.get(&schema_id.0)?;
+        let schema = self.schema_entries.get(schema_ref)?;
         let item = &schema.iter().find(|(i, _)| *i == idx)?.1;
         Some(match item {
             SchemaType::FieldRef(t) => self.field_entries.get(t)?.1.clone(),
@@ -249,7 +254,8 @@ impl SchemaData {
     }
 
     pub fn get_schema_field_name(&self, schema_id: &SchemaId, idx: u16) -> Option<String> {
-        let schema = self.schema_entries.get(&schema_id.0)?;
+        let schema_ref = self.schema_refs.get(&schema_id.0)?;
+        let schema = self.schema_entries.get(schema_ref)?;
         let item = &schema.iter().find(|(i, _)| *i == idx)?.1;
         match item {
             SchemaType::FieldRef(t) => Some(self.field_entries.get(t)?.0.clone()),
@@ -309,7 +315,7 @@ pub(crate) fn parse_schema(
 
     let payload_end = payload_start
         .checked_add(length)
-        .ok_or(ParseError::InvalidSchema)?;
+        .ok_or(ParseError::InvalidSchema("Invalid payload length"))?;
 
     if data.len() < payload_end {
         return Err(ParseError::IoError(
@@ -366,14 +372,86 @@ pub(crate) fn parse_schema(
 
         schema_entries.insert(schema_id, fields);
     }
+    let mut schema_refs: HashMap<u16, u16> = HashMap::new();
 
     if cursor.position() as usize != payload_end {
-        return Err(ParseError::InvalidSchema);
+        return Err(ParseError::InvalidSchema("Invalid payload length"));
     }
 
-    Ok(SchemaData {
+    let reflection_types = schema_entries
+        .get(&_types_ref)
+        .ok_or(ParseError::InvalidSchema("Invalid type reference"))?;
+
+    for (_, reflection_type) in reflection_types {
+        let reflection_type_ref = match reflection_type {
+            SchemaType::FieldRef(ref_id) => *ref_id,
+
+            SchemaType::AnonType(
+                InnerType::Ref(schema_id)
+            ) => schema_id.0,
+
+            _ => {
+                return Err(ParseError::InvalidSchema("Invalid SchemaType"));
+            }
+        };
+        let reflection_type_entry = schema_entries
+            .get(&reflection_type_ref)
+            .ok_or(ParseError::InvalidSchema("Fail to find reflection ref"))?;
+
+        if reflection_type_entry.len() != 1 {
+            return Err(ParseError::InvalidSchema("Incorrection reflection type entry length"));
+        }
+
+        let (type_id, fields) =
+            &reflection_type_entry[0];
+
+        let fields_ref = match fields {
+            SchemaType::AnonType(
+                InnerType::Ref(schema_id)
+            ) => schema_id.0,
+
+            _ => {
+                return Err(ParseError::InvalidSchema("Invalid field_ref"));
+            }
+        };
+
+        schema_refs.insert(
+            *type_id,
+            fields_ref,
+        );
+    }
+
+    let data = SchemaData {
         root_schema_id,
         schema_entries,
-        field_entries
-    })
+        field_entries,
+        schema_refs,
+    };
+
+    for schema_id in 0..=4 {
+        let schema_id = SchemaId(schema_id);
+
+        tracing::debug!(
+        "schema {:?} -> layout {:?}",
+        schema_id,
+        data.schema_refs.get(&schema_id.0)
+    );
+
+        for field in 0..64 {
+            if let Some(ty) =
+                data.get_schema_field_type(
+                    &schema_id,
+                    field
+                )
+            {
+                tracing::debug!(
+                "  field {} = {:?}",
+                field,
+                ty
+            );
+            }
+        }
+    }
+
+    Ok(data)
 }

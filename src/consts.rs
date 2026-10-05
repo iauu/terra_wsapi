@@ -31,6 +31,7 @@ pub enum Operation {
 }
 
 #[repr(u8)]
+#[derive(Debug)]
 pub enum SmallOperation {
     ADD = 2,
     REPLACE = 0,
@@ -42,9 +43,9 @@ impl TryFrom<u8> for SmallOperation {
     type Error = ();
     fn try_from(value: u8) -> Result<Self, Self::Error> {
         match value {
-            0 => Ok(Self::ADD),
-            1 => Ok(Self::REPLACE),
-            2 => Ok(Self::DELETE),
+            2 => Ok(Self::ADD),
+            0 => Ok(Self::REPLACE),
+            1 => Ok(Self::DELETE),
             3 => Ok(Self::DELETE_AND_ADD),
             _ => Err(())
         }
