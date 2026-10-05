@@ -2,7 +2,7 @@ name: Docker Multi-Arch Build
 
 on:
   push:
-    branches: [ master ]
+    branches: [ main ]
 
 env:
   REGISTRY: ghcr.io
