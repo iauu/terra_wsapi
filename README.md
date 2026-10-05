@@ -9,8 +9,8 @@ It used the JWT token from https://terra.hackclub.com. This is the same JWT toke
 used for the `Authorization` header when the browser send requests to
 https://api.terra.hackclub.com, and you can obtain the JWT there (It seems to be valid for 7 days).
 
-You can try the project by listen to the websocket at `wss://ws.terra.iau.sh/ws` which tell you the game 
-state every 5s. (Or `wss://ws.terra.iau.sh/ws_high` for up to update every 200ms for higher definition data)
+You can try the project by listen to the websocket at `wss://ws_terra.iau.sh/ws` which tell you the game 
+state every 5s. (Or `wss://ws_terra.iau.sh/ws_high` for up to update every 200ms for higher definition data)
 
 ### Notice
 
