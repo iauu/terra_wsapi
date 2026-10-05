@@ -336,6 +336,26 @@ async fn ws_output(
     })
 }
 
+async fn ws_output_high(
+    ws: WebSocketUpgrade,
+    _user_agent: Option<TypedHeader<headers::UserAgent>>,
+    ConnectInfo(_addr): ConnectInfo<SocketAddr>,
+    State(state): State<Arc<RwLock<ServerState>>>,
+) -> impl IntoResponse {
+    let mut watch_rx = state.read().await.broadcast.clone();
+    ws.on_upgrade(|mut socket| async move {
+        while let Ok(change) = watch_rx.has_changed() {
+            if change {
+                let data = watch_rx.borrow().deref().clone();
+                watch_rx.mark_unchanged();
+                let _ = socket
+                    .send(axum::extract::ws::Message::Text(serde_json::to_string(&data).unwrap().into())).await;
+            }
+            sleep(Duration::from_millis(200)).await;
+        }
+    })
+}
+
 
 #[tokio::main]
 async fn main() {
@@ -369,6 +389,7 @@ async fn main() {
     let _clone = state.clone();
     let app = Router::new()
         .route("/ws", any(ws_output))
+        .route("/ws_high", any(ws_output_high))
         .with_state(_clone)
         .layer(
             TraceLayer::new_for_http()
