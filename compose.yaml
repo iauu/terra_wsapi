@@ -1,0 +1,7 @@
+services:
+  kasu:
+    build: .
+    image: ghcr.io/iauu/terra_wsapi:latest
+    restart: unless-stopped
+    env_file:
+      - .env
