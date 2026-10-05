@@ -158,6 +158,7 @@ async fn ws_task(
         .json(&json!({
             "token": jwt,
             "protocol": 1,
+            "levelId":"town-square",
         }))
         .send()
         .await?
@@ -321,15 +322,16 @@ async fn ws_output(
     ConnectInfo(_addr): ConnectInfo<SocketAddr>,
     State(state): State<Arc<RwLock<ServerState>>>,
 ) -> impl IntoResponse {
-    let watch_rx = state.read().await.broadcast.clone();
+    let mut watch_rx = state.read().await.broadcast.clone();
     ws.on_upgrade(|mut socket| async move {
         while let Ok(change) = watch_rx.has_changed() {
-            while change {
+            if change {
                 let data = watch_rx.borrow().deref().clone();
+                watch_rx.mark_unchanged();
                 let _ = socket
                     .send(axum::extract::ws::Message::Text(serde_json::to_string(&data).unwrap().into())).await;
             }
-            sleep(Duration::from_millis(150)).await;
+            sleep(Duration::from_secs(5)).await;
         }
     })
 }
