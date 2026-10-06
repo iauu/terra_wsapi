@@ -41,7 +41,7 @@ use tracing::log::warn;
 use crate::cursor::{ByteCursor, ParseError};
 use crate::decoder::Decoder;
 use tokio::time::sleep;
-use crate::event::{decode_inbound_message, decode_ping_check, encode_pong_check, MessageKind, FORCE_TAKEOVER};
+use crate::event::{decode_inbound_message, decode_ping_check, encode_pong_check, InboundMessage, MessageKind, FORCE_TAKEOVER};
 
 #[derive(Debug, Error)]
 pub enum WsError {
@@ -93,10 +93,15 @@ pub struct MatchMakeResp {
     processId: String,
 }
 
+pub struct WebsocketTaskState<'a> {
+    pub(crate) jwt: String,
+    pub(crate) tx_ws_change:  &'a mut watch::Sender<serde_json::Value>,
+    pub(crate) tx_message: &'a mut tokio::sync::broadcast::Sender<InboundMessage>
+}
+
 
 async fn ws_task(
-    jwt: String,
-    tx_ws_change: &mut watch::Sender<serde_json::Value>,
+    state: &'_ WebsocketTaskState<'_>,
 ) -> Result<(), WsError> {
     let client = reqwest::Client::new();
 
@@ -106,7 +111,7 @@ async fn ws_task(
              matchmake/joinOrCreate/world"
         )
         .json(&json!({
-            "token": jwt,
+            "token": state.jwt,
             "protocol": 1,
             "levelId":"town-square",
         }))
@@ -199,7 +204,7 @@ async fn ws_task(
                         decoder.apply(&mut cursor)?;
                         let json = decoder.to_json()?;
                         // tracing::debug!("{:?}", json);
-                        let _ = tx_ws_change.send(json);
+                        let _ = state.tx_ws_change.send(json);
 
                     }
                     0x0d => {
@@ -226,7 +231,7 @@ async fn ws_task(
                             MessageKind::ForceTakeover => {},
                             MessageKind::ChatMessage => {
                                 if let Some(message) = decode_inbound_message(&data)? {
-
+                                    let _ = state.tx_message.send(message);
                                 }
                             }
                         }
@@ -309,13 +314,19 @@ async fn ws_output_high(
 
 #[tokio::main]
 async fn main() {
-    let (mut tx, rx) = tokio::sync::watch::channel(serde_json::Value::Null);
-    let state = Arc::new(RwLock::new(ServerState::new(&rx)));
+    let (mut tx_ws_change, rx_ws_change) = tokio::sync::watch::channel(serde_json::Value::Null);
+    let (mut tx_message, rx_message) = tokio::sync::broadcast::channel::<InboundMessage>(1024);
+    let state = Arc::new(RwLock::new(ServerState::new(&rx_ws_change)));
 
 
     tokio::spawn(async move {
+        let task_state = WebsocketTaskState {
+            jwt: env::var("JWT").unwrap(),
+            tx_ws_change: &mut tx_ws_change,
+            tx_message: &mut tx_message,
+        };
         loop {
-            match ws_task(env::var("JWT").unwrap(), &mut tx).await {
+            match ws_task(&task_state).await {
                 Ok(()) => {},
                 Err(e) => {
                     tracing::error!("Websocket connection error: {}", e);
