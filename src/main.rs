@@ -3,6 +3,7 @@ mod schema;
 mod decoder;
 mod cursor;
 mod consts;
+mod event;
 
 use schema::parse_schema;
 
@@ -40,7 +41,7 @@ use tracing::log::warn;
 use crate::cursor::{ByteCursor, ParseError};
 use crate::decoder::Decoder;
 use tokio::time::sleep;
-
+use crate::event::{decode_ping_check, encode_pong_check};
 
 #[derive(Debug, Error)]
 pub enum WsError {
@@ -92,57 +93,6 @@ pub struct MatchMakeResp {
     processId: String,
 }
 
-#[derive(Debug, Deserialize)]
-struct PingCheck {
-    id: u64,
-    rtt: f64,
-}
-
-#[derive(Debug, Serialize)]
-struct PongCheck {
-    id: u64,
-}
-
-fn decode_ping_check(
-    data: &[u8],
-) -> Result<Option<PingCheck>, WsError> {
-    if data.first() != Some(&0x0d) {
-        return Ok(None);
-    }
-
-    let mut de =
-        rmp_serde::Deserializer::new(&data[1..]);
-
-    let message_type =
-        String::deserialize(&mut de)?;
-
-    if message_type != "pingCheck" {
-        return Ok(None);
-    }
-
-    let ping =
-        PingCheck::deserialize(&mut de)?;
-
-    Ok(Some(ping))
-}
-
-fn encode_pong_check(
-    id: u64,
-) -> Result<Vec<u8>, WsError> {
-    let mut out = Vec::new();
-    out.push(0x0d);
-
-    rmp_serde::encode::write(
-        &mut out,
-        &"pongCheck",
-    )?;
-    rmp_serde::encode::write(
-        &mut out,
-        &PongCheck { id },
-    )?;
-
-    Ok(out)
-}
 
 async fn ws_task(
     jwt: String,
