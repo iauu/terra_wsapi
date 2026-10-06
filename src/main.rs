@@ -41,7 +41,7 @@ use tracing::log::warn;
 use crate::cursor::{ByteCursor, ParseError};
 use crate::decoder::Decoder;
 use tokio::time::sleep;
-use crate::event::{decode_ping_check, encode_pong_check};
+use crate::event::{decode_ping_check, encode_pong_check, MessageKind};
 
 #[derive(Debug, Error)]
 pub enum WsError {
@@ -220,16 +220,25 @@ async fn ws_task(
                         let _ = tx.send(json);
                     }
                     0x0d => {
-                        if let Some(ping) =
-                            decode_ping_check(&data)?
-                        {
-                            let pong =
-                                encode_pong_check(ping.id)?;
+                        match MessageKind::from_bytes(&data[1..])? {
+                            MessageKind::PingCheck => {
+                                if let Some(ping) =
+                                    decode_ping_check(&data)?
+                                {
+                                    let pong =
+                                        encode_pong_check(ping.id)?;
 
-                            write
-                                .send(Message::Binary(pong.into()).into())
-                                .await?;
+                                    write
+                                        .send(Message::Binary(pong.into()).into())
+                                        .await?;
+                                }
+                            },
+                            MessageKind::Unknown(v) => {
+                                tracing::warn!("Unexpected message kind: {}", v);
+                            },
+                            MessageKind::PongCheck => {}
                         }
+
                     }
                     opcode => {
                         eprintln!(

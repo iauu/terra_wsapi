@@ -1,3 +1,4 @@
+use std::str::FromStr;
 use serde::{Deserialize, Serialize};
 use crate::WsError;
 
@@ -51,4 +52,36 @@ pub fn encode_pong_check(
     )?;
 
     Ok(out)
+}
+
+macro_rules! message_kind {
+    ($(($name:ident => $bname:literal)),* $(,)?) => {
+        pub enum MessageKind {
+            $($name),*,
+            Unknown(String)
+        }
+
+        impl ::std::str::FromStr for MessageKind {
+            type Err = ::std::convert::Infallible;
+            fn from_str(s: &str) -> ::std::result::Result<Self, Self::Err> {
+                match s {
+                    $($bname => Ok(MessageKind::$name),)*
+                    v @ _ => Ok(MessageKind::Unknown(v.to_string()))
+                }
+            }
+        }
+    };
+}
+
+impl MessageKind {
+    pub fn from_bytes(data: &[u8]) -> Result<MessageKind, WsError> {
+        let mut de = rmp_serde::Deserializer::new(data);
+        let message_type = String::deserialize(&mut de)?;
+        return Ok(MessageKind::from_str(&message_type).unwrap());
+    }
+}
+
+message_kind! {
+    (PingCheck => "pingCheck"),
+    (PongCheck => "pongCheck")
 }
