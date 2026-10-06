@@ -41,7 +41,7 @@ use tracing::log::warn;
 use crate::cursor::{ByteCursor, ParseError};
 use crate::decoder::Decoder;
 use tokio::time::sleep;
-use crate::event::{decode_ping_check, encode_pong_check, MessageKind};
+use crate::event::{decode_inbound_message, decode_ping_check, encode_pong_check, MessageKind, FORCE_TAKEOVER};
 
 #[derive(Debug, Error)]
 pub enum WsError {
@@ -96,7 +96,7 @@ pub struct MatchMakeResp {
 
 async fn ws_task(
     jwt: String,
-    tx: &mut watch::Sender<serde_json::Value>,
+    tx_ws_change: &mut watch::Sender<serde_json::Value>,
 ) -> Result<(), WsError> {
     let client = reqwest::Client::new();
 
@@ -184,7 +184,7 @@ async fn ws_task(
                             ))
                             .await?;
                     }
-                    0x0e => {
+                    0x0e | 0x0f => {
                         let decoder = decoder
                             .as_mut()
                             .ok_or(
@@ -198,26 +198,9 @@ async fn ws_task(
 
                         decoder.apply(&mut cursor)?;
                         let json = decoder.to_json()?;
-                        tracing::debug!("{:?}", json);
-                        let _ = tx.send(json);
+                        // tracing::debug!("{:?}", json);
+                        let _ = tx_ws_change.send(json);
 
-                    }
-                    0x0f => {
-                        let decoder = decoder
-                            .as_mut()
-                            .ok_or(
-                                ParseError::InvalidSchema("Unable to obtain decoder")
-                            )?;
-
-                        let mut cursor =
-                            ByteCursor::new(
-                                data.as_ref()
-                            );
-
-                        decoder.apply(&mut cursor)?;
-                        let json = decoder.to_json()?;
-                        tracing::debug!("{:?}", json);
-                        let _ = tx.send(json);
                     }
                     0x0d => {
                         match MessageKind::from_bytes(&data[1..])? {
@@ -229,16 +212,24 @@ async fn ws_task(
                                         encode_pong_check(ping.id)?;
 
                                     write
-                                        .send(Message::Binary(pong.into()).into())
+                                        .send(Message::Binary(pong.into()))
                                         .await?;
                                 }
                             },
                             MessageKind::Unknown(v) => {
                                 tracing::warn!("Unexpected message kind: {}", v);
                             },
-                            MessageKind::PongCheck => {}
-                        }
+                            MessageKind::PongCheck => {},
+                            MessageKind::SessionConflict => {
+                                write.send(Message::Binary(FORCE_TAKEOVER.as_slice().into())).await?;
+                            },
+                            MessageKind::ForceTakeover => {},
+                            MessageKind::ChatMessage => {
+                                if let Some(message) = decode_inbound_message(&data)? {
 
+                                }
+                            }
+                        }
                     }
                     opcode => {
                         eprintln!(
