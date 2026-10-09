@@ -8,7 +8,7 @@ pub struct PingCheck {
     pub rtt: f64,
 }
 
-#[derive(Debug, Deserialize, Copy, Clone, PartialEq, Eq)]
+#[derive(Debug, Deserialize, Copy, Clone, PartialEq, Eq, Serialize)]
 pub enum Channel {
     #[serde(rename = "global")]
     Global,
@@ -16,7 +16,7 @@ pub enum Channel {
     Local
 }
 
-#[derive(Debug, Deserialize, Copy, Clone, PartialEq, Eq)]
+#[derive(Debug, Deserialize, Copy, Clone, PartialEq, Eq, Serialize)]
 pub enum Source {
     #[serde(rename = "terra")]
     Terra,
@@ -24,7 +24,7 @@ pub enum Source {
     Slack
 }
 
-#[derive(Debug, Deserialize, Clone)]
+#[derive(Debug, Deserialize, Clone, Serialize)]
 pub struct InboundMessage {
     pub id: String,
     pub channel: Channel,

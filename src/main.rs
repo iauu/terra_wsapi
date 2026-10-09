@@ -74,13 +74,18 @@ pub enum WsError {
 }
 
 struct ServerState {
-    broadcast: tokio::sync::watch::Receiver<serde_json::Value>,
+    update_watch: tokio::sync::watch::Receiver<serde_json::Value>,
+    chat_rx: tokio::sync::broadcast::Receiver<InboundMessage>,
 }
 
 impl ServerState {
-    pub fn new(recv: &tokio::sync::watch::Receiver<serde_json::Value>) -> Self {
+    pub fn new(
+        watch: &tokio::sync::watch::Receiver<serde_json::Value>,
+        rx: tokio::sync::broadcast::Receiver<InboundMessage>,
+    ) -> Self {
         Self {
-            broadcast: recv.clone(),
+            update_watch: watch.clone(),
+            chat_rx: rx
         }
     }
 }
@@ -277,7 +282,7 @@ async fn ws_output(
     ConnectInfo(_addr): ConnectInfo<SocketAddr>,
     State(state): State<Arc<RwLock<ServerState>>>,
 ) -> impl IntoResponse {
-    let mut watch_rx = state.read().await.broadcast.clone();
+    let mut watch_rx = state.read().await.update_watch.clone();
     ws.on_upgrade(|mut socket| async move {
         while let Ok(change) = watch_rx.has_changed() {
             if change {
@@ -297,7 +302,7 @@ async fn ws_output_high(
     ConnectInfo(_addr): ConnectInfo<SocketAddr>,
     State(state): State<Arc<RwLock<ServerState>>>,
 ) -> impl IntoResponse {
-    let mut watch_rx = state.read().await.broadcast.clone();
+    let mut watch_rx = state.read().await.update_watch.clone();
     ws.on_upgrade(|mut socket| async move {
         while let Ok(change) = watch_rx.has_changed() {
             if change {
@@ -311,12 +316,27 @@ async fn ws_output_high(
     })
 }
 
+async fn ws_output_chat(
+    ws: WebSocketUpgrade,
+    user_agent: Option<TypedHeader<headers::UserAgent>>,
+    ConnectInfo(addr): ConnectInfo<SocketAddr>,
+    State(state): State<Arc<RwLock<ServerState>>>,
+) -> impl IntoResponse {
+    let mut chat_rx = state.read().await.chat_rx.resubscribe();
+    ws.on_upgrade(|mut socket| async move {
+        while let Ok(message) = chat_rx.recv().await {
+            let value = serde_json::to_string(&message).unwrap();
+            let _ = socket.send(axum::extract::ws::Message::Text(value.into())).await;
+        }
+    })
+}
+
 
 #[tokio::main]
 async fn main() {
     let (mut tx_ws_change, rx_ws_change) = tokio::sync::watch::channel(serde_json::Value::Null);
     let (mut tx_message, rx_message) = tokio::sync::broadcast::channel::<InboundMessage>(1024);
-    let state = Arc::new(RwLock::new(ServerState::new(&rx_ws_change)));
+    let state = Arc::new(RwLock::new(ServerState::new(&rx_ws_change, rx_message)));
 
 
     tokio::spawn(async move {
@@ -351,6 +371,7 @@ async fn main() {
     let app = Router::new()
         .route("/ws", any(ws_output))
         .route("/ws_high", any(ws_output_high))
+        .route("/chat", any(ws_output_chat))
         .with_state(_clone)
         .layer(
             TraceLayer::new_for_http()
