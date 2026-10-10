@@ -39,6 +39,13 @@ pub struct InboundMessage {
     pub avatar_url: String,
 }
 
+#[derive(Debug, Deserialize, Clone, Serialize)]
+pub struct ChatHistory {
+    pub local: Vec<InboundMessage>,
+    pub global: Vec<InboundMessage>,
+    // "access": "ok"
+}
+
 #[derive(Debug, Serialize)]
 pub struct PongCheck {
     pub id: u64,
@@ -106,6 +113,27 @@ pub fn decode_inbound_message(data: &[u8]) -> Result<Option<InboundMessage>, WsE
     Ok(Some(ping))
 }
 
+pub fn decode_chat_history(data: &[u8]) -> Result<Option<InboundMessage>, WsError> {
+    if data.first() != Some(&0x0d) {
+        return Ok(None);
+    }
+
+    let mut de =
+        rmp_serde::Deserializer::new(&data[1..]);
+
+    let message_type =
+        String::deserialize(&mut de)?;
+
+    if message_type != "chat.message" {
+        return Ok(None);
+    }
+
+    let ping =
+        InboundMessage::deserialize(&mut de)?;
+
+    Ok(Some(ping))
+}
+
 macro_rules! message_kind {
     ($(($name:ident => $bname:literal)),* $(,)?) => {
         pub enum MessageKind {
@@ -141,4 +169,5 @@ message_kind! {
     (SessionConflict => "sessionConflict"),
     (ForceTakeover => "forceTakeover"),
     (ChatMessage => "chat.message"),
+    (ChatHistory => "chat.history"),
 }

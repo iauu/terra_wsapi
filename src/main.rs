@@ -4,6 +4,7 @@ mod decoder;
 mod cursor;
 mod consts;
 mod event;
+mod request;
 
 use schema::parse_schema;
 
@@ -28,20 +29,22 @@ use rand::Rng;
 
 use std::{env, thread};
 use std::fmt::format;
-use std::ops::Deref;
+use std::ops::{ControlFlow, Deref};
 use std::path::PathBuf;
 use cfg_if::cfg_if;
 use reqwest::Url;
 use bytes;
+use futures_util::stream::SplitSink;
 use serde_json::json;
-use tokio_tungstenite::connect_async;
+use tokio::net::TcpStream;
+use tokio_tungstenite::{connect_async, MaybeTlsStream, WebSocketStream};
 use tokio_tungstenite::tungstenite::client::IntoClientRequest;
 use tokio_tungstenite::tungstenite::Message;
 use tracing::log::warn;
 use crate::cursor::{ByteCursor, ParseError};
 use crate::decoder::Decoder;
 use tokio::time::sleep;
-use crate::event::{decode_inbound_message, decode_ping_check, encode_pong_check, InboundMessage, MessageKind, FORCE_TAKEOVER};
+use crate::event::{decode_chat_history, decode_inbound_message, decode_ping_check, encode_pong_check, InboundMessage, MessageKind, FORCE_TAKEOVER};
 
 #[derive(Debug, Error)]
 pub enum WsError {
@@ -71,6 +74,8 @@ pub enum WsError {
         #[from]
         rmp_serde::encode::Error
     ),
+    #[error("Disconnection")]
+    Disconnection
 }
 
 struct ServerState {
@@ -104,6 +109,140 @@ pub struct WebsocketTaskState<'a> {
     pub(crate) tx_message: &'a mut tokio::sync::broadcast::Sender<InboundMessage>
 }
 
+
+async fn process_message(message: Message, state: &'_ WebsocketTaskState<'_>, sender: &'_ mut  SplitSink<WebSocketStream<MaybeTlsStream<TcpStream>>, Message>, decoder: &'_ mut Option<Decoder>) -> Result<(), WsError> {
+    match message {
+        Message::Binary(data) => {
+            if data.is_empty() {
+                return Ok(())
+            }
+
+            match data[0] {
+                0x0a => {
+                    tracing::debug!(
+                            "JOIN/SCHEMA: {} bytes",
+                            data.len()
+                        );
+                    let schema_data = match parse_schema(&data) {
+                        Ok(v) => v,
+                        Err(e) => {
+                            tracing::error!(
+                                    "parse_schema failed: {:?}",
+                                e);
+                            return Err(e.into());
+                        }
+                    };
+                    tracing::debug!(
+                        "root_schema_id={:?}, schema_ids={:?}",
+                        schema_data.root_schema_id,
+                        schema_data.schema_entries.keys().collect::<Vec<_>>(),
+                    );
+
+                    tracing::debug!(
+                        "root field 0={:?}",
+                        schema_data.get_schema_field_type(
+                            &schema_data.root_schema_id,
+                            0,
+                        )
+                    );
+
+                    let root_schema_id =
+                        schema_data.root_schema_id;
+
+                    *decoder = Some(Decoder::new(
+                        root_schema_id,
+                        schema_data,
+                    ));
+
+                    sender
+                        .send(Message::Binary(
+                            bytes::Bytes::from(vec![0x0a])
+                        ))
+                        .await?;
+                }
+                0x0e | 0x0f => {
+                    let decoder = decoder
+                        .as_mut()
+                        .ok_or(
+                            ParseError::InvalidSchema("Unable to obtain decoder")
+                        )?;
+
+                    let mut cursor =
+                        ByteCursor::new(
+                            data.as_ref()
+                        );
+
+                    decoder.apply(&mut cursor)?;
+                    let json = decoder.to_json()?;
+                    // tracing::debug!("{:?}", json);
+                    let _ = state.tx_ws_change.send(json);
+
+                }
+                0x0d => {
+                    match MessageKind::from_bytes(&data[1..])? {
+                        MessageKind::PingCheck => {
+                            if let Some(ping) =
+                                decode_ping_check(&data)?
+                            {
+                                let pong =
+                                    encode_pong_check(ping.id)?;
+
+                                sender
+                                    .send(Message::Binary(pong.into()))
+                                    .await?;
+                            }
+                        },
+                        MessageKind::Unknown(v) => {
+                            tracing::warn!("Unexpected message kind: {}", v);
+                        },
+                        MessageKind::PongCheck => {},
+                        MessageKind::SessionConflict => {
+                            sender.send(Message::Binary(FORCE_TAKEOVER.as_slice().into())).await?;
+                        },
+                        MessageKind::ForceTakeover => {},
+                        MessageKind::ChatMessage => {
+                            if let Some(message) = decode_inbound_message(&data)? {
+                                let _ = state.tx_message.send(message);
+                            }
+                        },
+                        MessageKind::ChatHistory => {
+                            if let Some(history) = decode_chat_history(&data)? {
+                            }
+                        }
+                    }
+                }
+                opcode => {
+                    eprintln!(
+                        "unknown binary opcode: \
+                             0x{opcode:02x}"
+                    );
+                }
+            }
+        }
+        Message::Ping(payload) => {
+            sender
+                .send(Message::Pong(payload).into())
+                .await?;
+        }
+        Message::Pong(_) => {}
+        Message::Close(frame) => {
+            println!(
+                "websocket closed: {:?}",
+                frame
+            );
+            return Err(WsError::Disconnection);
+        }
+        Message::Text(text) => {
+            println!(
+                "unexpected websocket text: {}",
+                text
+            );
+        }
+
+        _ => {}
+    };
+    Ok(())
+}
 
 async fn ws_task(
     state: &'_ WebsocketTaskState<'_>,
@@ -144,133 +283,7 @@ async fn ws_task(
 
     while let Some(message) = read.next().await {
         let message = message?;
-
-        match message {
-            Message::Binary(data) => {
-                if data.is_empty() {
-                    continue;
-                }
-
-                match data[0] {
-                    0x0a => {
-                        tracing::debug!(
-                            "JOIN/SCHEMA: {} bytes",
-                            data.len()
-                        );
-                        let schema_data = match parse_schema(&data) {
-                            Ok(v) => v,
-                            Err(e) => {
-                                tracing::error!(
-                                    "parse_schema failed: {:?}",
-                                e);
-                                return Err(e.into());
-                            }
-                        };
-                        tracing::debug!(
-                        "root_schema_id={:?}, schema_ids={:?}",
-                        schema_data.root_schema_id,
-                        schema_data.schema_entries.keys().collect::<Vec<_>>(),
-                    );
-
-                                        tracing::debug!(
-                        "root field 0={:?}",
-                        schema_data.get_schema_field_type(
-                            &schema_data.root_schema_id,
-                            0,
-                        )
-                    );
-
-                        let root_schema_id =
-                            schema_data.root_schema_id;
-
-                        decoder = Some(Decoder::new(
-                            root_schema_id,
-                            schema_data,
-                        ));
-
-                        write
-                            .send(Message::Binary(
-                                bytes::Bytes::from(vec![0x0a])
-                            ))
-                            .await?;
-                    }
-                    0x0e | 0x0f => {
-                        let decoder = decoder
-                            .as_mut()
-                            .ok_or(
-                                ParseError::InvalidSchema("Unable to obtain decoder")
-                            )?;
-
-                        let mut cursor =
-                            ByteCursor::new(
-                                data.as_ref()
-                            );
-
-                        decoder.apply(&mut cursor)?;
-                        let json = decoder.to_json()?;
-                        // tracing::debug!("{:?}", json);
-                        let _ = state.tx_ws_change.send(json);
-
-                    }
-                    0x0d => {
-                        match MessageKind::from_bytes(&data[1..])? {
-                            MessageKind::PingCheck => {
-                                if let Some(ping) =
-                                    decode_ping_check(&data)?
-                                {
-                                    let pong =
-                                        encode_pong_check(ping.id)?;
-
-                                    write
-                                        .send(Message::Binary(pong.into()))
-                                        .await?;
-                                }
-                            },
-                            MessageKind::Unknown(v) => {
-                                tracing::warn!("Unexpected message kind: {}", v);
-                            },
-                            MessageKind::PongCheck => {},
-                            MessageKind::SessionConflict => {
-                                write.send(Message::Binary(FORCE_TAKEOVER.as_slice().into())).await?;
-                            },
-                            MessageKind::ForceTakeover => {},
-                            MessageKind::ChatMessage => {
-                                if let Some(message) = decode_inbound_message(&data)? {
-                                    let _ = state.tx_message.send(message);
-                                }
-                            }
-                        }
-                    }
-                    opcode => {
-                        eprintln!(
-                            "unknown binary opcode: \
-                             0x{opcode:02x}"
-                        );
-                    }
-                }
-            }
-            Message::Ping(payload) => {
-                write
-                    .send(Message::Pong(payload).into())
-                    .await?;
-            }
-            Message::Pong(_) => {}
-            Message::Close(frame) => {
-                println!(
-                    "websocket closed: {:?}",
-                    frame
-                );
-                break;
-            }
-            Message::Text(text) => {
-                println!(
-                    "unexpected websocket text: {}",
-                    text
-                );
-            }
-
-            _ => {}
-        }
+        process_message(message, &state, &mut write, &mut decoder).await?;
     }
 
     Ok(())
