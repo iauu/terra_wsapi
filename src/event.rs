@@ -29,11 +29,14 @@ pub struct InboundMessage {
     pub id: String,
     pub channel: Channel,
     pub username: String,
-    pub displayName: String,
+    #[serde(rename = "avatarUrl")]
+    pub display_name: String,
     pub source: Source,
     pub text: String,
     #[serde(rename = "createdAt", with = "time::serde::iso8601")]
     pub created_at: time::OffsetDateTime,
+    #[serde(rename = "avatarUrl")]
+    pub avatar_url: String,
 }
 
 #[derive(Debug, Serialize)]
