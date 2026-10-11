@@ -6,6 +6,7 @@ use axum::extract::{ConnectInfo, State, WebSocketUpgrade};
 use axum::http::StatusCode;
 use axum::Json;
 use axum::response::IntoResponse;
+use axum::routing::any;
 use axum_extra::TypedHeader;
 use tokio::sync::RwLock;
 use crate::{ServerRouter, ServerState};
@@ -14,6 +15,7 @@ use crate::models::TerraState;
 
 pub fn routes() -> ServerRouter {
     ServerRouter::new()
+        .route("/", any(get_online))
 }
 
 #[axum::debug_handler]
