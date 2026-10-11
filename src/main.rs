@@ -5,11 +5,12 @@ mod cursor;
 mod consts;
 mod event;
 mod request;
+mod routes;
 
 use schema::parse_schema;
 
 use std::collections::HashMap;
-use axum::{body::Bytes, extract::ws::{WebSocketUpgrade}, response::{IntoResponse, Response}, routing::any, Json, Router};
+use axum::{body::Bytes, extract::ws::WebSocketUpgrade, response::{IntoResponse, Response}, routing::any, Json, Router};
 use axum_extra::TypedHeader;
 use indexmap::IndexMap;
 use axum::body::Body;
@@ -45,6 +46,8 @@ use crate::cursor::{ByteCursor, ParseError};
 use crate::decoder::Decoder;
 use tokio::time::sleep;
 use crate::event::{decode_chat_history, decode_inbound_message, decode_ping_check, encode_pong_check, InboundMessage, MessageKind, FORCE_TAKEOVER};
+
+pub type ServerRouter = Router<Arc<RwLock<ServerState>>>;
 
 #[derive(Debug, Error)]
 pub enum WsError {
@@ -289,61 +292,6 @@ async fn ws_task(
     Ok(())
 }
 
-async fn ws_output(
-    ws: WebSocketUpgrade,
-    _user_agent: Option<TypedHeader<headers::UserAgent>>,
-    ConnectInfo(_addr): ConnectInfo<SocketAddr>,
-    State(state): State<Arc<RwLock<ServerState>>>,
-) -> impl IntoResponse {
-    let mut watch_rx = state.read().await.update_watch.clone();
-    ws.on_upgrade(|mut socket| async move {
-        while let Ok(change) = watch_rx.has_changed() {
-            if change {
-                let data = watch_rx.borrow().deref().clone();
-                watch_rx.mark_unchanged();
-                let _ = socket
-                    .send(axum::extract::ws::Message::Text(serde_json::to_string(&data).unwrap().into())).await;
-            }
-            sleep(Duration::from_secs(5)).await;
-        }
-    })
-}
-
-async fn ws_output_high(
-    ws: WebSocketUpgrade,
-    _user_agent: Option<TypedHeader<headers::UserAgent>>,
-    ConnectInfo(_addr): ConnectInfo<SocketAddr>,
-    State(state): State<Arc<RwLock<ServerState>>>,
-) -> impl IntoResponse {
-    let mut watch_rx = state.read().await.update_watch.clone();
-    ws.on_upgrade(|mut socket| async move {
-        while let Ok(change) = watch_rx.has_changed() {
-            if change {
-                let data = watch_rx.borrow().deref().clone();
-                watch_rx.mark_unchanged();
-                let _ = socket
-                    .send(axum::extract::ws::Message::Text(serde_json::to_string(&data).unwrap().into())).await;
-            }
-            sleep(Duration::from_millis(200)).await;
-        }
-    })
-}
-
-async fn ws_output_chat(
-    ws: WebSocketUpgrade,
-    user_agent: Option<TypedHeader<headers::UserAgent>>,
-    ConnectInfo(addr): ConnectInfo<SocketAddr>,
-    State(state): State<Arc<RwLock<ServerState>>>,
-) -> impl IntoResponse {
-    let mut chat_rx = state.read().await.chat_rx.resubscribe();
-    ws.on_upgrade(|mut socket| async move {
-        while let Ok(message) = chat_rx.recv().await {
-            let value = serde_json::to_string(&message).unwrap();
-            let _ = socket.send(axum::extract::ws::Message::Text(value.into())).await;
-        }
-    })
-}
-
 
 #[tokio::main]
 async fn main() {
@@ -382,9 +330,7 @@ async fn main() {
 
     let _clone = state.clone();
     let app = Router::new()
-        .route("/ws", any(ws_output))
-        .route("/ws_high", any(ws_output_high))
-        .route("/chat", any(ws_output_chat))
+        .merge(routes::routes())
         .with_state(_clone)
         .layer(
             TraceLayer::new_for_http()
