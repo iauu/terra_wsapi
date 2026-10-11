@@ -2,46 +2,46 @@ use serde::{Deserialize, Serialize};
 
 #[derive(Clone, Debug, Deserialize, Serialize)]
 pub struct NpcData {
-    id: String,
-    name: String,
-    rotation: f64,
-    scale: f64,
-    sprite: String,
-    x: f64,
-    z: f64
+    pub id: String,
+    pub name: String,
+    pub rotation: f64,
+    pub scale: f64,
+    pub sprite: String,
+    pub x: f64,
+    pub z: f64
 }
 
 #[derive(Clone, Debug, Deserialize, Serialize)]
 pub struct Player {
     #[serde(rename = "clothesHue")]
-    clothes_hue: u16,
+    pub clothes_hue: u16,
     #[serde(rename="displayName")]
-    display_name: String,
+    pub display_name: String,
     #[serde(rename = "equippedAccessories")]
-    equipped_accessories: serde_json::Value,
-    id: String,
+    pub equipped_accessories: serde_json::Value,
+    pub id: String,
     #[serde(rename="lastInputSeq")]
-    last_input_seq: u16,
+    pub last_input_seq: u16,
     #[serde(rename="lastProcessedSeq")]
-    last_processed_seq: u16,
+    pub last_processed_seq: u16,
     #[serde(rename="profilePictureUrl")]
-    profile_picture_url: String,
+    pub profile_picture_url: String,
     #[serde(rename="slackId")]
-    slack_id: String,
-    username: String,
+    pub slack_id: String,
+    pub username: String,
     #[serde(rename="velX")]
-    vel_x: f64,
+    pub vel_x: f64,
     #[serde(rename="velZ")]
-    vel_z: f64,
-    x: f64,
-    z: f64,
+    pub vel_z: f64,
+    pub x: f64,
+    pub z: f64,
 }
 
 #[derive(Clone, Debug, Deserialize, Serialize)]
-pub struct ServerState {
-    farmItems: serde_json::Value,
-    levelId: String,
-    npcs: Vec<NpcData>,
-    players: Vec<Player>,
-    serverTime: u64
+pub struct TerraState {
+    pub farmItems: serde_json::Value,
+    pub levelId: String,
+    pub npcs: Vec<NpcData>,
+    pub players: Vec<Player>,
+    pub serverTime: u64
 }

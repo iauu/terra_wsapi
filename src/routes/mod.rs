@@ -3,6 +3,7 @@ use crate::ServerRouter;
 mod ws;
 mod ws_high;
 mod chat;
+mod api;
 
 pub fn routes() -> ServerRouter {
     ServerRouter::new()

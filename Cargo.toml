@@ -7,7 +7,7 @@ edition = "2024"
 paste = "1.0.15"
 serde_json = "1.0.151"
 thiserror = "2.0.21"
-axum = { version = "0.8.9", features = ["default", "ws"] }
+axum = { version = "0.8.9", features = ["default", "ws", "macros"] }
 indexmap = "2.14.2"
 serde = { version = "1.0.229", features = ["derive"] }
 tokio = { version = "1.53.2", features = ["rt-multi-thread"] }
