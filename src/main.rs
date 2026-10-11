@@ -6,6 +6,7 @@ mod consts;
 mod event;
 mod request;
 mod routes;
+mod models;
 
 use schema::parse_schema;
 
