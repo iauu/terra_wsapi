@@ -1,3 +1,4 @@
+use ahash::HashMap;
 use serde::{Deserialize, Serialize};
 
 #[derive(Clone, Debug, Deserialize, Serialize)]
@@ -41,7 +42,7 @@ pub struct Player {
 pub struct TerraState {
     pub farmItems: serde_json::Value,
     pub levelId: String,
-    pub npcs: Vec<NpcData>,
-    pub players: Vec<Player>,
+    pub npcs: HashMap<String, NpcData>,
+    pub players: HashMap<String, Player>,
     pub serverTime: u64
 }

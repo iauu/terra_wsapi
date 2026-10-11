@@ -1,3 +1,4 @@
+use std::fmt::format;
 use std::net::SocketAddr;
 use std::ops::Deref;
 use std::sync::Arc;
@@ -11,6 +12,7 @@ use axum_extra::TypedHeader;
 use tokio::sync::RwLock;
 use crate::{ServerRouter, ServerState};
 use crate::models::TerraState;
+use itertools::Itertools;
 
 
 pub fn routes() -> ServerRouter {
@@ -23,8 +25,13 @@ async fn get_online(
     State(state): State<Arc<RwLock<ServerState>>>,
 ) -> impl IntoResponse {
     let state = state.read().await.update_watch.borrow().deref().clone();
-    let Ok(parsed) = serde_json::from_value::<TerraState>(state) else {
-        return (StatusCode::INTERNAL_SERVER_ERROR, Body::from("Model from terra have changed significantly and the server model need to be updated to serve the result"));
+    let parsed = match serde_json::from_value::<TerraState>(state) {
+        Ok(v) => v,
+        Err(e) => {
+            return (StatusCode::INTERNAL_SERVER_ERROR, Body::from(
+                format!("Model from terra have changed significantly and the server model need to be updated to serve the result\nError:\n{:?}", e)
+            ));
+        }
     };
-    (StatusCode::OK, Body::from(serde_json::to_string(&parsed.players).unwrap()))
+    (StatusCode::OK, Body::from(serde_json::to_string(&parsed.players.iter().map(|(k, v)| v).sorted_by(|a, b| a.id.cmp(&b.id)).collect::<Vec<_>>()).unwrap()))
 }
