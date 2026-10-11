@@ -10,4 +10,5 @@ pub fn routes() -> ServerRouter {
         .nest("/ws", ws::routes())
         .nest("/ws_high", ws_high::routes())
         .nest("/chat", chat::routes())
+        .nest("/api", api::routes())
 }
