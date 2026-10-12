@@ -15,16 +15,16 @@ pub struct NpcData {
 #[derive(Clone, Debug, Deserialize, Serialize)]
 pub struct Player {
     #[serde(rename = "clothesHue")]
-    pub clothes_hue: u16,
+    pub clothes_hue: u64,
     #[serde(rename="displayName")]
     pub display_name: String,
     #[serde(rename = "equippedAccessories")]
     pub equipped_accessories: serde_json::Value,
     pub id: String,
     #[serde(rename="lastInputSeq")]
-    pub last_input_seq: u16,
+    pub last_input_seq: u64,
     #[serde(rename="lastProcessedSeq")]
-    pub last_processed_seq: u16,
+    pub last_processed_seq: u64,
     #[serde(rename="profilePictureUrl")]
     pub profile_picture_url: String,
     #[serde(rename="slackId")]
