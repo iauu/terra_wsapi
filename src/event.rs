@@ -36,7 +36,7 @@ pub struct InboundMessage {
     #[serde(rename = "createdAt", with = "time::serde::iso8601")]
     pub created_at: time::OffsetDateTime,
     #[serde(rename = "avatarUrl")]
-    pub avatar_url: String,
+    pub avatar_url: Option<String>,
 }
 
 #[derive(Debug, Deserialize, Clone, Serialize)]
